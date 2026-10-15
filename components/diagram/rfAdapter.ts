@@ -31,8 +31,20 @@ export function documentNodesToReactFlow(
 
 /**
  * Converts internal DiagramDocument edges to React Flow edges
+ * Distributes multiple edges connected to the same source or target among handles
  */
 export function documentEdgesToReactFlow(edges: DiagramEdge[]): RFEdge<CustomEdgeData>[] {
+  // Count how many edges originate from each node and terminate at each node
+  const sourceCount = new Map<string, number>();
+  const targetCount = new Map<string, number>();
+  edges.forEach(e => {
+    sourceCount.set(e.from, (sourceCount.get(e.from) || 0) + 1);
+    targetCount.set(e.to, (targetCount.get(e.to) || 0) + 1);
+  });
+
+  const sourceIndex = new Map<string, number>();
+  const targetIndex = new Map<string, number>();
+
   return edges.map(e => {
     let markerEnd: any = undefined;
     if (e.arrowEnd === 'arrow') {
@@ -42,12 +54,42 @@ export function documentEdgesToReactFlow(edges: DiagramEdge[]): RFEdge<CustomEdg
       };
     }
 
+    const sIdx = sourceIndex.get(e.from) || 0;
+    sourceIndex.set(e.from, sIdx + 1);
+    const sTotal = sourceCount.get(e.from) || 1;
+
+    const tIdx = targetIndex.get(e.to) || 0;
+    targetIndex.set(e.to, tIdx + 1);
+    const tTotal = targetCount.get(e.to) || 1;
+
+    // Distribute sourceHandle if multiple edges exist
+    let sourceHandle: string = e.fromAnchor || 'bottom';
+    if (sTotal > 1) {
+      if (sTotal === 2) {
+        sourceHandle = sIdx === 0 ? 'bottom-left' : 'bottom-right';
+      } else {
+        const slots = ['bottom-left', 'bottom', 'bottom-right'];
+        sourceHandle = slots[sIdx % slots.length];
+      }
+    }
+
+    // Distribute targetHandle if multiple edges exist
+    let targetHandle = e.toAnchor ? `${e.toAnchor}-target` : 'top-target';
+    if (tTotal > 1) {
+      if (tTotal === 2) {
+        targetHandle = tIdx === 0 ? 'top-left-target' : 'top-right-target';
+      } else {
+        const slots = ['top-left-target', 'top-target', 'top-right-target'];
+        targetHandle = slots[tIdx % slots.length];
+      }
+    }
+
     return {
       id: e.id,
       source: e.from,
       target: e.to,
-      sourceHandle: e.fromAnchor || 'bottom',
-      targetHandle: e.toAnchor ? `${e.toAnchor}-target` : 'top-target',
+      sourceHandle,
+      targetHandle,
       type: 'custom',
       data: {
         ...e,
@@ -90,8 +132,8 @@ export function reactFlowToDocument(
 
   const edges: DiagramEdge[] = rfEdges.map(e => {
     const data = e.data || {};
-    const fromAnchor = (e.sourceHandle?.replace('-target', '') || data.fromAnchor || 'bottom') as any;
-    const toAnchor = (e.targetHandle?.replace('-target', '') || data.toAnchor || 'top') as any;
+    const fromAnchor = (e.sourceHandle?.replace('-target', '').replace('-left', '').replace('-right', '') || data.fromAnchor || 'bottom') as any;
+    const toAnchor = (e.targetHandle?.replace('-target', '').replace('-left', '').replace('-right', '') || data.toAnchor || 'top') as any;
 
     return {
       id: e.id,
@@ -105,6 +147,7 @@ export function reactFlowToDocument(
       strokeColor: data.strokeColor || '#475569',
       strokeWidth: data.strokeWidth || 2,
       arrowEnd: data.arrowEnd || 'arrow',
+      cardinality: data.cardinality,
     };
   });
 

@@ -224,6 +224,54 @@ const DiagramStudioCanvas: React.FC = () => {
     isUndoRedoAction.current = false;
   }, [loadDocIntoCanvas]);
 
+  // Keyboard shortcuts (Delete, Backspace, Ctrl+Z, Ctrl+Y, Ctrl+A)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('input') ||
+        target.closest('textarea')
+      ) {
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedNodeIds.length > 0 || selectedEdgeId) {
+          e.preventDefault();
+          if (selectedNodeIds.length > 0) {
+            setNodes(nds => nds.filter(n => !selectedNodeIds.includes(n.id)));
+            setEdges(eds => eds.filter(ed => !selectedNodeIds.includes(ed.source) && !selectedNodeIds.includes(ed.target)));
+            setSelectedNodeIds([]);
+          }
+          if (selectedEdgeId) {
+            setEdges(eds => eds.filter(ed => ed.id !== selectedEdgeId));
+            setSelectedEdgeId(null);
+          }
+          commitHistory();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectedNodeIds(nodes.map(n => n.id));
+      } else if (e.key === 'Escape') {
+        setSelectedNodeIds([]);
+        setSelectedEdgeId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNodeIds, selectedEdgeId, nodes, handleUndo, handleRedo, commitHistory, setNodes, setEdges]);
+
   // Viewport updates
   const handleFitView = useCallback(() => {
     fitView({ padding: 0.2, duration: 250 });
@@ -311,21 +359,23 @@ const DiagramStudioCanvas: React.FC = () => {
       ];
     }
 
-    // Place near center of current viewport
+    // Place near center of current viewport, snap to 15px grid to ensure alignment
     const vp = getViewport();
-    const centerX = (-vp.x + 400) / vp.zoom;
-    const centerY = (-vp.y + 300) / vp.zoom;
+    const rawX = (-vp.x + 400) / vp.zoom - width / 2;
+    const rawY = (-vp.y + 300) / vp.zoom - height / 2;
+    const snappedX = Math.round(rawX / 15) * 15;
+    const snappedY = Math.round(rawY / 15) * 15;
 
     const newNode: RFNode<CustomNodeData> = {
       id,
       type: 'custom',
-      position: { x: Math.round(centerX - width / 2), y: Math.round(centerY - height / 2) },
+      position: { x: snappedX, y: snappedY },
       style: { width, height },
       data: {
         id,
         type,
-        x: Math.round(centerX - width / 2),
-        y: Math.round(centerY - height / 2),
+        x: snappedX,
+        y: snappedY,
         width,
         height,
         text,

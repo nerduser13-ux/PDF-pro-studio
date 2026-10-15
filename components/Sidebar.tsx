@@ -96,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: "diagram",
-          label: "Diagram Studio (draw.io)",
+          label: "Diagram Studio",
           icon: Network,
           color: "text-cyan-500",
         },

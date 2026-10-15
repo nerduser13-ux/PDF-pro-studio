@@ -40,10 +40,25 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
 
   const borderDashClass = strokeDash === 'dashed' ? 'border-dashed' : strokeDash === 'dotted' ? 'border-dotted' : 'border-solid';
 
-  // Render Handles based on shape
-  // For diamond, we position handles at 50% on top, right, bottom, left
+  // Render multiple connection Handles per side to allow separate connection points
   const renderHandles = () => (
     <>
+      {/* Top handles: 25%, 50%, 75% */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="top-left-target"
+        style={{ top: -6, left: '25%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Top}
+        id="top-left"
+        style={{ top: -6, left: '25%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
       <Handle
         type="target"
         position={Position.Top}
@@ -57,6 +72,37 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
         id="top"
         style={{ top: -6, left: '50%', transform: 'translateX(-50%)' }}
         className="!w-3 !h-3 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="top-right-target"
+        style={{ top: -6, left: '75%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Top}
+        id="top-right"
+        style={{ top: -6, left: '75%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      {/* Right handles: 35%, 50%, 65% */}
+      <Handle
+        type="target"
+        position={Position.Right}
+        id="right-top-target"
+        style={{ right: -6, top: '35%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right-top"
+        style={{ right: -6, top: '35%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
       />
 
       <Handle
@@ -76,6 +122,37 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
 
       <Handle
         type="target"
+        position={Position.Right}
+        id="right-bottom-target"
+        style={{ right: -6, top: '65%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right-bottom"
+        style={{ right: -6, top: '65%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      {/* Bottom handles: 25%, 50%, 75% */}
+      <Handle
+        type="target"
+        position={Position.Bottom}
+        id="bottom-left-target"
+        style={{ bottom: -6, left: '25%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="bottom-left"
+        style={{ bottom: -6, left: '25%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      <Handle
+        type="target"
         position={Position.Bottom}
         id="bottom-target"
         style={{ bottom: -6, left: '50%', transform: 'translateX(-50%)' }}
@@ -91,6 +168,37 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
 
       <Handle
         type="target"
+        position={Position.Bottom}
+        id="bottom-right-target"
+        style={{ bottom: -6, left: '75%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="bottom-right"
+        style={{ bottom: -6, left: '75%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      {/* Left handles: 35%, 50%, 65% */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="left-top-target"
+        style={{ left: -6, top: '35%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Left}
+        id="left-top"
+        style={{ left: -6, top: '35%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      <Handle
+        type="target"
         position={Position.Left}
         id="left-target"
         style={{ left: -6, top: '50%', transform: 'translateY(-50%)' }}
@@ -102,6 +210,21 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
         id="left"
         style={{ left: -6, top: '50%', transform: 'translateY(-50%)' }}
         className="!w-3 !h-3 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="left-bottom-target"
+        style={{ left: -6, top: '65%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
+      />
+      <Handle
+        type="source"
+        position={Position.Left}
+        id="left-bottom"
+        style={{ left: -6, top: '65%' }}
+        className="!w-2.5 !h-2.5 !bg-white !border-2 !border-cyan-600 !rounded-full opacity-0 group-hover:opacity-100 !z-30 hover:!scale-125 transition-all"
       />
     </>
   );
@@ -194,7 +317,7 @@ export const CustomDiagramNodeComponent: React.FC<NodeProps> = memo(({ id, data,
           } ${selected ? 'ring-2 ring-cyan-500' : ''}`}
         >
           <div
-            style={{ backgroundColor: fillColor, color: '#ffffff' }}
+            style={{ backgroundColor: fillColor, color: textColor || '#ffffff' }}
             className="px-3 py-2 flex items-center justify-between shrink-0"
           >
             <span className="font-black text-xs uppercase tracking-wider truncate">{text || 'TABLE'}</span>
