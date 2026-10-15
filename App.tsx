@@ -22,6 +22,7 @@ import { WordViewerTool } from "./components/tools/WordViewerTool";
 import { WordMerger } from "./components/tools/WordMerger";
 import { PPTMerger } from "./components/tools/PPTMerger";
 import { OfficeToPDF } from "./components/tools/OfficeToPDF";
+import { DiagramStudio } from "./components/tools/DiagramStudio";
 import { FileUploader } from "./components/FileUploader";
 import { FilePreviewer } from "./components/FilePreviewer";
 import { ComparePreviewer } from "./components/ComparePreviewer";
@@ -575,6 +576,10 @@ const App: React.FC = () => {
   };
 
   const renderMainContent = () => {
+    if (activeTool === "diagram") {
+      return <DiagramStudio />;
+    }
+
     const file = files[activeFileIndex];
     if (!file)
       return (
@@ -835,28 +840,32 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
-          <div
-            onMouseDown={() => setIsResizingInspector(true)}
-            className="w-1 cursor-col-resize bg-slate-200 hover:bg-blue-300 active:bg-blue-400 transition-colors"
-            title="Resize inspector"
-          />
-          <div
-            style={{ width: `${inspectorWidth}px` }}
-            className="bg-white border-l border-slate-200 overflow-y-auto custom-scrollbar flex flex-col shadow-[-10px_0_30px_rgba(0,0,0,0.02)]"
-          >
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between shrink-0">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                Inspector
-              </span>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                <span className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">
-                  Config Pane
-                </span>
+          {activeTool !== "diagram" && (
+            <>
+              <div
+                onMouseDown={() => setIsResizingInspector(true)}
+                className="w-1 cursor-col-resize bg-slate-200 hover:bg-blue-300 active:bg-blue-400 transition-colors"
+                title="Resize inspector"
+              />
+              <div
+                style={{ width: `${inspectorWidth}px` }}
+                className="bg-white border-l border-slate-200 overflow-y-auto custom-scrollbar flex flex-col shadow-[-10px_0_30px_rgba(0,0,0,0.02)]"
+              >
+                <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between shrink-0">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Inspector
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="text-[9px] font-bold text-blue-600 uppercase tracking-wider">
+                      Config Pane
+                    </span>
+                  </div>
+                </div>
+                <div className="flex-1">{renderToolControls()}</div>
               </div>
-            </div>
-            <div className="flex-1">{renderToolControls()}</div>
-          </div>
+            </>
+          )}
         </div>
       </main>
     </div>

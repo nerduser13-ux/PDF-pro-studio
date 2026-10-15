@@ -26,6 +26,7 @@ import {
   ScanText,
   PanelLeftClose,
   PanelLeftOpen,
+  Network,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -92,6 +93,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: "Compare PDF",
           icon: Diff,
           color: "text-purple-600",
+        },
+        {
+          id: "diagram",
+          label: "Diagram Studio (draw.io)",
+          icon: Network,
+          color: "text-cyan-500",
         },
       ],
     },

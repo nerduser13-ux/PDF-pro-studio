@@ -21,6 +21,7 @@ export type ToolType =
   | "zip"
   | "edit"
   | "sign"
+  | "diagram"
   | "word-viewer"
   | "word-merge"
   | "ppt-merge"

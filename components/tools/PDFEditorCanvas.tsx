@@ -4,7 +4,6 @@ import * as fabric from 'fabric';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import { Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { DiagramModal } from './DiagramModal';
 
 interface CanvasProps {
   file: FileData;
@@ -35,7 +34,6 @@ export const PDFEditorCanvas: React.FC<CanvasProps> = ({ file, mode, color, size
   const [numPages, setNumPages] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [baseDimensions, setBaseDimensions] = useState({ width: 0, height: 0 });
-  const [isDiagramModalOpen, setIsDiagramModalOpen] = useState(false);
   
   const pageAnnotations = useRef<Map<number, string>>(new Map());
   const historyStack = useRef<string[]>([]);
@@ -485,54 +483,17 @@ export const PDFEditorCanvas: React.FC<CanvasProps> = ({ file, mode, color, size
       }
     };
 
-    const handleOpenDiagram = () => {
-      setIsDiagramModalOpen(true);
-    };
-
     window.addEventListener('editor:undo', handleUndo);
     window.addEventListener('editor:redo', handleRedo);
     window.addEventListener('editor:reset-page', handleReset);
     window.addEventListener('editor:download', handleDownload);
-    window.addEventListener('editor:open-diagram', handleOpenDiagram);
     return () => {
       window.removeEventListener('editor:undo', handleUndo);
       window.removeEventListener('editor:redo', handleRedo);
       window.removeEventListener('editor:reset-page', handleReset);
       window.removeEventListener('editor:download', handleDownload);
-      window.removeEventListener('editor:open-diagram', handleOpenDiagram);
     };
   }, [file, numPages, currentPage, baseDimensions, handleUndo, handleRedo, saveHistory]);
-
-  const handleInsertDiagram = async (dataUrl: string, width: number, height: number) => {
-    if (!fabricRef.current) return;
-    const canvas = fabricRef.current;
-    try {
-      const imgObj = await fabric.FabricImage.fromURL(dataUrl);
-      
-      // Scale diagram if it's too large for current view
-      let scale = 1;
-      const maxW = (canvas.width || 800) * 0.6;
-      if (width > maxW) {
-        scale = maxW / width;
-      }
-      
-      imgObj.set({
-        left: 50,
-        top: 50,
-        scaleX: scale,
-        scaleY: scale,
-        selectable: true,
-        hasControls: true,
-      });
-
-      canvas.add(imgObj);
-      canvas.setActiveObject(imgObj);
-      canvas.renderAll();
-      saveHistory();
-    } catch (err) {
-      console.error('Failed to add diagram image to canvas:', err);
-    }
-  };
 
   return (
     <div className="h-full bg-slate-200 flex flex-col items-center overflow-hidden relative">
@@ -562,12 +523,6 @@ export const PDFEditorCanvas: React.FC<CanvasProps> = ({ file, mode, color, size
           <canvas ref={canvasRef} />
         </div>
       </div>
-
-      <DiagramModal
-        isOpen={isDiagramModalOpen}
-        onClose={() => setIsDiagramModalOpen(false)}
-        onInsert={handleInsertDiagram}
-      />
     </div>
   );
 };
