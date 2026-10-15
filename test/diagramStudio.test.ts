@@ -4,8 +4,9 @@ import { DIAGRAM_TEMPLATES } from '../components/diagram/templates';
 import { exportDocumentToSvg } from '../components/diagram/exportUtils';
 import { getNodeAnchorPoint, computeEdgePath } from '../components/diagram/geometry';
 import { DiagramNode } from '../components/diagram/types';
+import { documentNodesToReactFlow, documentEdgesToReactFlow, reactFlowToDocument } from '../components/diagram/rfAdapter';
 
-describe('Diagram Studio Engine Tests', () => {
+describe('Diagram Studio Engine & React Flow Adapter Tests', () => {
   it('Scenario A: Native Editing & Geometry Logic', () => {
     const nodeA: DiagramNode = {
       id: 'a',
@@ -39,21 +40,39 @@ describe('Diagram Studio Engine Tests', () => {
       cornerRadius: 8,
     };
 
-    // Verify anchor calculation
     const startPt = getNodeAnchorPoint(nodeA, 'right');
     expect(startPt).toEqual({ x: 300, y: 150 });
 
     const endPt = getNodeAnchorPoint(nodeB, 'left');
     expect(endPt).toEqual({ x: 400, y: 150 });
 
-    // Path calculation
     const { pathData, labelPoint } = computeEdgePath(startPt, endPt, 'orthogonal');
     expect(pathData).toContain('M 300 150');
     expect(pathData).toContain('350');
     expect(labelPoint.x).toBe(350);
   });
 
-  it('Scenario B: Mermaid Flowchart Import & Clean Line Breaks (No <br/>)', () => {
+  it('Scenario B: React Flow Bi-directional Adapter Conversion', () => {
+    const tmpl = DIAGRAM_TEMPLATES.find(t => t.id === 'swot-analysis')!;
+    const doc = tmpl.createDocument();
+
+    // 1. Convert to React Flow nodes and edges
+    const rfNodes = documentNodesToReactFlow(doc.nodes);
+    const rfEdges = documentEdgesToReactFlow(doc.edges);
+
+    expect(rfNodes.length).toBe(doc.nodes.length);
+    expect(rfEdges.length).toBe(doc.edges.length);
+    expect(rfNodes[0].type).toBe('custom');
+    expect(rfNodes[0].data.id).toBe(doc.nodes[0].id);
+
+    // 2. Convert back to DiagramDocument
+    const restoredDoc = reactFlowToDocument(doc, rfNodes, rfEdges);
+    expect(restoredDoc.nodes.length).toBe(doc.nodes.length);
+    expect(restoredDoc.edges.length).toBe(doc.edges.length);
+    expect(restoredDoc.nodes[0].text).toBe(doc.nodes[0].text);
+  });
+
+  it('Scenario C: Mermaid Flowchart Import & Clean Line Breaks (No <br/>)', () => {
     const mermaidCode = `flowchart TD
     A["User Request<br/>Initiated"] --> B{"Is Valid?"}
     B -->|"Yes"| C["Process Order"]
@@ -65,7 +84,6 @@ describe('Diagram Studio Engine Tests', () => {
     expect(res.document?.nodes.length).toBe(4);
     expect(res.document?.edges.length).toBe(3);
 
-    // Verify converted types & no literal <br/>
     const nodeA = res.document?.nodes.find(n => n.id === 'A');
     expect(nodeA?.text).not.toContain('<br/>');
     expect(nodeA?.text).toContain('\n');
@@ -77,7 +95,6 @@ describe('Diagram Studio Engine Tests', () => {
     expect(parallelogramNode?.type).toBe('parallelogram');
     expect(parallelogramNode?.text).not.toContain('<br />');
 
-    // Roundtrip export
     if (res.document) {
       const generated = exportDocumentToMermaid(res.document);
       expect(generated).toContain('flowchart TD');
@@ -85,7 +102,7 @@ describe('Diagram Studio Engine Tests', () => {
     }
   });
 
-  it('Scenario C: Mermaid ER Diagram Import & Columns', () => {
+  it('Scenario D: Mermaid ER Diagram Import & Columns', () => {
     const mermaidEr = `erDiagram
     USERS ||--o{ ORDERS : places
     USERS {
@@ -108,12 +125,12 @@ describe('Diagram Studio Engine Tests', () => {
     expect(userTable?.fields?.[0].isPk).toBe(true);
   });
 
-  it('Scenario D: Templates Instantiation (SWOT & PESTEL Infographics)', () => {
+  it('Scenario E: Templates Instantiation (SWOT & PESTEL Infographics)', () => {
     const pestelTemplate = DIAGRAM_TEMPLATES.find(t => t.id === 'pestel-infographic');
     expect(pestelTemplate).toBeDefined();
 
     const doc = pestelTemplate!.createDocument();
-    expect(doc.nodes.length).toBe(7); // 1 central capsule + 6 cards
+    expect(doc.nodes.length).toBe(7);
     expect(doc.edges.length).toBe(6);
 
     const pCard = doc.nodes.find(n => n.id === 'pestel-p');
@@ -122,7 +139,6 @@ describe('Diagram Studio Engine Tests', () => {
     expect(pCard?.badgeText).toBe('P');
     expect(pCard?.iconName).toBe('building');
 
-    // Export SVG must contain all nodes & headers
     const svg = exportDocumentToSvg(doc);
     expect(svg).toContain('<svg');
     expect(svg).toContain('PESTEL');
@@ -130,7 +146,7 @@ describe('Diagram Studio Engine Tests', () => {
     expect(svg).toContain('ECONOMICAL');
   });
 
-  it('Scenario E: Label sanitization function', () => {
+  it('Scenario F: Label sanitization function', () => {
     expect(cleanMermaidLabel('Test<br/>Line 2')).toBe('Test\nLine 2');
     expect(cleanMermaidLabel('"Quoted string"')).toBe('Quoted string');
     expect(cleanMermaidLabel('&amp; &lt; &gt;')).toBe('& < >');

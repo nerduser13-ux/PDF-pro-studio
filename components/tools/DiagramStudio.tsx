@@ -1,5 +1,23 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import mermaid from 'mermaid';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  useNodesState,
+  useEdgesState,
+  useReactFlow,
+  addEdge,
+  Connection,
+  Edge as RFEdge,
+  Node as RFNode,
+  reconnectEdge,
+  Background,
+  BackgroundVariant,
+  Panel,
+  MarkerType,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+
 import {
   Square,
   Circle,
@@ -7,11 +25,9 @@ import {
   Database,
   Layers,
   Type,
-  Move,
   Trash2,
   Plus,
   Download,
-  Copy,
   Sparkles,
   RotateCcw,
   Palette,
@@ -23,25 +39,19 @@ import {
   Workflow,
   Check,
   Sliders,
-  CornerDownRight,
-  MousePointer2,
   FolderOpen,
   Save,
   Undo2,
   Redo2,
-  Upload,
   AlignLeft,
   AlignCenter,
   AlignRight,
   Bold,
   Italic,
   Underline,
-  Eye,
-  Grid,
-  FileText,
   Search,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
 } from 'lucide-react';
 
 import {
@@ -50,17 +60,15 @@ import {
   DiagramEdge,
   ShapeType,
   ArrowStyle,
-  ArrowHead,
   RoutingType,
-  AnchorPosition,
-  ViewportTransform
 } from '../diagram/types';
-import { getNodeAnchorPoint, computeEdgePath } from '../diagram/geometry';
 import { DIAGRAM_TEMPLATES, TemplateDefinition } from '../diagram/templates';
 import { parseMermaidToDocument, exportDocumentToMermaid } from '../diagram/mermaidConverter';
 import { downloadPng, downloadSvg, downloadNativeJson } from '../diagram/exportUtils';
 import { loadActiveDiagram, saveActiveDiagram } from '../diagram/persistence';
-import { ShapeRenderer } from '../diagram/ShapeRenderer';
+import { CustomDiagramNodeComponent, CustomNodeData } from '../diagram/CustomNode';
+import { CustomDiagramEdgeComponent, CustomEdgeData } from '../diagram/CustomEdge';
+import { documentNodesToReactFlow, documentEdgesToReactFlow, reactFlowToDocument } from '../diagram/rfAdapter';
 
 const COLOR_PRESETS = [
   '#4f46e5', '#2563eb', '#0284c7', '#0d9488',
@@ -70,99 +78,138 @@ const COLOR_PRESETS = [
   '#f8fafc', '#ecfdf5', '#eff6ff', '#fef3c7', '#fff1f2'
 ];
 
-export const DiagramStudio: React.FC = () => {
-  // Primary Diagram State (Single source of truth with LocalStorage persistence)
-  const [doc, setDoc] = useState<DiagramDocument>(() => loadActiveDiagram());
+const nodeTypes = {
+  custom: CustomDiagramNodeComponent,
+};
 
-  // Autosave whenever document changes
-  useEffect(() => {
-    saveActiveDiagram(doc);
-  }, [doc]);
+const edgeTypes = {
+  custom: CustomDiagramEdgeComponent,
+};
 
-  // Undo / Redo History Stack
-  const historyStack = useRef<DiagramDocument[]>([doc]);
+// Internal Canvas Component within ReactFlowProvider
+const DiagramStudioCanvas: React.FC = () => {
+  // Base document persistence
+  const [docBase, setDocBase] = useState<DiagramDocument>(() => loadActiveDiagram());
+
+  // React Flow state hooks
+  const [nodes, setNodes, onNodesChange] = useNodesState<RFNode<CustomNodeData>>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<RFEdge<CustomEdgeData>>([]);
+  const { fitView, zoomIn, zoomOut, setViewport, getViewport, screenToFlowPosition } = useReactFlow();
+
+  // Undo / Redo Stacks
+  const historyStack = useRef<DiagramDocument[]>([docBase]);
   const redoStack = useRef<DiagramDocument[]>([]);
   const isUndoRedoAction = useRef(false);
 
-  // Tab State
+  // Tab & UI state
   const [activeTab, setActiveTab] = useState<'visual' | 'mermaid'>('visual');
+  const [currentZoom, setCurrentZoom] = useState<number>(100);
 
-  // Viewport / Pan & Zoom
-  const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, zoom: 1 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  // Selection & Interactions
+  // Selection
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
-  // Dragging Nodes
-  const [isDraggingNode, setIsDraggingNode] = useState(false);
-  const dragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const dragPointerStart = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  // Resizing Node
-  const [isResizing, setIsResizing] = useState(false);
-  const resizeNodeId = useRef<string | null>(null);
-  const resizeInitial = useRef<{ x: number; y: number; width: number; height: number }>({ x: 0, y: 0, width: 0, height: 0 });
-  const resizeHandle = useRef<string>('se');
-
-  // Interactive Connector Creation
-  const [isConnecting, setIsConnecting] = useState(false);
-  const connectingSource = useRef<{ nodeId: string; anchor: AnchorPosition } | null>(null);
-  const [connectionPointer, setConnectionPointer] = useState<{ x: number; y: number } | null>(null);
-
-  // Selection Box
-  const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
-
-  // Inline Label Editing
-  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-
-  // Template Modal
+  // Modals & Panels
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [templateSearch, setTemplateSearch] = useState('');
   const [templateCategory, setTemplateCategory] = useState<string>('All');
+  const [importNotification, setImportNotification] = useState<string | null>(null);
 
-  // Mermaid Tab
+  // Mermaid editor state
   const [mermaidText, setMermaidText] = useState<string>('');
   const [mermaidSvg, setMermaidSvg] = useState<string>('');
   const [mermaidError, setMermaidError] = useState<string | null>(null);
-  const [importNotification, setImportNotification] = useState<string | null>(null);
 
-  // Canvas Reference
-  const canvasRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Save history commit
-  const commitToHistory = useCallback((newDoc: DiagramDocument) => {
-    if (isUndoRedoAction.current) return;
-    historyStack.current.push(newDoc);
-    if (historyStack.current.length > 50) historyStack.current.shift();
-    redoStack.current = [];
+  // Re-sync RF elements when docBase changes externally
+  const loadDocIntoCanvas = useCallback((newDoc: DiagramDocument) => {
+    setDocBase(newDoc);
+    const rfNodes = documentNodesToReactFlow(newDoc.nodes, {
+      onNodeChange: (id, updates) => {
+        setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, ...updates } } : n));
+      },
+      onAddCol: (id) => {
+        setNodes(nds => nds.map(n => {
+          if (n.id !== id) return n;
+          const currFields = n.data.fields || [];
+          const newH = ((n.style?.height as number) || n.data.height || 160) + 26;
+          return {
+            ...n,
+            style: { ...n.style, height: newH },
+            data: {
+              ...n.data,
+              height: newH,
+              fields: [...currFields, { id: `f-${Date.now()}`, name: 'new_col', type: 'varchar(100)' }]
+            }
+          };
+        }));
+      },
+      onRemoveCol: (id, colIdx) => {
+        setNodes(nds => nds.map(n => {
+          if (n.id !== id) return n;
+          const currFields = n.data.fields || [];
+          const newH = Math.max(90, ((n.style?.height as number) || n.data.height || 160) - 26);
+          return {
+            ...n,
+            style: { ...n.style, height: newH },
+            data: {
+              ...n.data,
+              height: newH,
+              fields: currFields.filter((_, i) => i !== colIdx)
+            }
+          };
+        }));
+      }
+    });
+    const rfEdges = documentEdgesToReactFlow(newDoc.edges);
+    setNodes(rfNodes);
+    setEdges(rfEdges);
+  }, [setNodes, setEdges]);
+
+  // Initial load
+  useEffect(() => {
+    loadDocIntoCanvas(docBase);
+    setTimeout(() => {
+      fitView({ padding: 0.2 });
+    }, 150);
   }, []);
 
-  const updateDoc = useCallback((updater: (prev: DiagramDocument) => DiagramDocument, recordHistory = true) => {
-    setDoc(prev => {
-      const next = updater(prev);
-      if (recordHistory) {
-        commitToHistory(next);
-      }
-      return next;
-    });
-  }, [commitToHistory]);
+  // Sync back to Document and LocalStorage
+  const getLatestDocument = useCallback((): DiagramDocument => {
+    return reactFlowToDocument(docBase, nodes, edges);
+  }, [docBase, nodes, edges]);
 
-  // Undo / Redo handlers
+  // Auto-save debounced
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const currentDoc = getLatestDocument();
+      saveActiveDiagram(currentDoc);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [nodes, edges, getLatestDocument]);
+
+  // Record history
+  const commitHistory = useCallback(() => {
+    if (isUndoRedoAction.current) return;
+    const currentDoc = getLatestDocument();
+    historyStack.current.push(currentDoc);
+    if (historyStack.current.length > 50) historyStack.current.shift();
+    redoStack.current = [];
+  }, [getLatestDocument]);
+
+  // Undo / Redo
   const handleUndo = useCallback(() => {
     if (historyStack.current.length <= 1) return;
     isUndoRedoAction.current = true;
     const current = historyStack.current.pop();
     if (current) redoStack.current.push(current);
     const prev = historyStack.current[historyStack.current.length - 1];
-    setDoc(prev);
+    loadDocIntoCanvas(prev);
     setSelectedNodeIds([]);
     setSelectedEdgeId(null);
     isUndoRedoAction.current = false;
-  }, []);
+  }, [loadDocIntoCanvas]);
 
   const handleRedo = useCallback(() => {
     if (redoStack.current.length === 0) return;
@@ -170,107 +217,61 @@ export const DiagramStudio: React.FC = () => {
     const next = redoStack.current.pop();
     if (next) {
       historyStack.current.push(next);
-      setDoc(next);
+      loadDocIntoCanvas(next);
       setSelectedNodeIds([]);
       setSelectedEdgeId(null);
     }
     isUndoRedoAction.current = false;
-  }, []);
+  }, [loadDocIntoCanvas]);
 
-  // Fit diagram to screen
-  const handleFitToScreen = useCallback(() => {
-    if (doc.nodes.length === 0 || !canvasRef.current) {
-      setViewport({ x: 0, y: 0, zoom: 1 });
-      return;
-    }
-    const padding = 60;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    doc.nodes.forEach(n => {
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + n.width);
-      maxY = Math.max(maxY, n.y + n.height);
-    });
+  // Viewport updates
+  const handleFitView = useCallback(() => {
+    fitView({ padding: 0.2, duration: 250 });
+  }, [fitView]);
 
-    const w = maxX - minX + padding * 2;
-    const h = maxY - minY + padding * 2;
-    const cw = canvasRef.current.clientWidth;
-    const ch = canvasRef.current.clientHeight;
+  const handleResetZoom = useCallback(() => {
+    setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 200 });
+  }, [setViewport]);
 
-    const scale = Math.min(2.0, Math.max(0.3, Math.min(cw / w, ch / h)));
-    const centerX = (cw - w * scale) / 2 - (minX - padding) * scale;
-    const centerY = (ch - h * scale) / 2 - (minY - padding) * scale;
-
-    setViewport({ x: centerX, y: centerY, zoom: scale });
-  }, [doc.nodes]);
-
-  // Convert screen coordinates to world coordinates
-  const screenToWorld = useCallback((clientX: number, clientY: number) => {
-    if (!canvasRef.current) return { x: 0, y: 0 };
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (clientX - rect.left - viewport.x) / viewport.zoom;
-    const y = (clientY - rect.top - viewport.y) / viewport.zoom;
-    return { x, y };
-  }, [viewport]);
-
-  // Sync Mermaid preview on code changes
-  useEffect(() => {
-    if (activeTab !== 'mermaid') return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const id = `mermaid-render-${Date.now()}`;
-        const { svg } = await mermaid.render(id, mermaidText);
-        if (!cancelled) {
-          setMermaidSvg(svg);
-          setMermaidError(null);
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setMermaidError(err?.message || 'Syntax error in Mermaid specification');
-        }
-      }
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
+  // Edge Connection Handling
+  const onConnect = useCallback((params: Connection) => {
+    const newEdge: RFEdge<CustomEdgeData> = {
+      ...params,
+      id: `edge-${Date.now().toString().slice(-4)}`,
+      type: 'custom',
+      data: {
+        from: params.source,
+        to: params.target,
+        routing: 'orthogonal',
+        style: 'solid',
+        strokeColor: '#4f46e5',
+        strokeWidth: 2,
+        arrowEnd: 'arrow',
+        label: 'relates to',
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: '#4f46e5',
+      },
     };
-  }, [mermaidText, activeTab]);
+    setEdges(eds => addEdge(newEdge, eds));
+    setSelectedEdgeId(newEdge.id);
+    commitHistory();
+  }, [setEdges, commitHistory]);
 
-  // Switch to Mermaid tab
-  const handleSwitchToMermaid = () => {
-    const generated = exportDocumentToMermaid(doc);
-    setMermaidText(generated);
-    setActiveTab('mermaid');
-  };
+  const onReconnect = useCallback((oldEdge: RFEdge, newConnection: Connection) => {
+    setEdges(els => reconnectEdge(oldEdge, newConnection, els));
+    commitHistory();
+  }, [setEdges, commitHistory]);
 
-  // Import Mermaid code into native document
-  const handleImportMermaidToCanvas = () => {
-    const res = parseMermaidToDocument(mermaidText);
-    if (!res.success || !res.document) {
-      setMermaidError(res.error || 'Failed to parse Mermaid code');
-      return;
-    }
-    setDoc(res.document);
-    commitToHistory(res.document);
-    setActiveTab('visual');
-    setSelectedNodeIds([]);
-    setSelectedEdgeId(null);
-    setImportNotification(`Successfully imported ${res.diagramType || 'diagram'} with ${res.document.nodes.length} nodes and ${res.document.edges.length} connectors into the canvas!`);
-    setTimeout(() => {
-      setImportNotification(null);
-      handleFitToScreen();
-    }, 4000);
-  };
+  // Selection change
+  const onSelectionChange = useCallback(({ nodes: selNodes, edges: selEdges }: { nodes: RFNode[]; edges: RFEdge[] }) => {
+    setSelectedNodeIds(selNodes.map(n => n.id));
+    setSelectedEdgeId(selEdges.length > 0 ? selEdges[0].id : null);
+  }, []);
 
   // Add new Shape Node from palette
   const handleAddShape = (type: ShapeType) => {
-    const centerWorld = screenToWorld(
-      (canvasRef.current?.clientWidth || 800) / 2,
-      (canvasRef.current?.clientHeight || 600) / 2
-    );
-
     const id = `node-${Date.now().toString().slice(-4)}`;
     let width = 180;
     let height = 80;
@@ -295,10 +296,6 @@ export const DiagramStudio: React.FC = () => {
       width = 160; height = 120; text = 'Note / Idea'; fillColor = '#fef9c3'; strokeColor = '#ca8a04';
     } else if (type === 'card') {
       width = 260; height = 150; text = '• Information item 1\n• Information item 2'; fillColor = '#3b82f6'; strokeColor = '#2563eb';
-    } else if (type === 'text') {
-      width = 140; height = 50; text = 'Text block'; fillColor = 'transparent'; strokeColor = 'transparent';
-    } else if (type === 'swimlane') {
-      width = 240; height = 450; text = 'CONTAINER'; fillColor = '#f8fafc'; strokeColor = '#cbd5e1';
     } else if (type === 'uml-class') {
       width = 220; height = 130; text = 'ClassName'; fillColor = '#f8fafc'; strokeColor = '#334155';
       umlMembers = [
@@ -314,298 +311,166 @@ export const DiagramStudio: React.FC = () => {
       ];
     }
 
-    const newNode: DiagramNode = {
+    // Place near center of current viewport
+    const vp = getViewport();
+    const centerX = (-vp.x + 400) / vp.zoom;
+    const centerY = (-vp.y + 300) / vp.zoom;
+
+    const newNode: RFNode<CustomNodeData> = {
       id,
-      type,
-      x: Math.round(centerWorld.x - width / 2),
-      y: Math.round(centerWorld.y - height / 2),
-      width,
-      height,
-      text,
-      fillColor,
-      strokeColor,
-      strokeWidth: 2,
-      textColor: type === 'er-table' ? '#ffffff' : '#1e293b',
-      fontSize: 12,
-      fontBold: type === 'er-table' || type === 'uml-class' || type === 'card',
-      cornerRadius: type === 'rounded' ? 16 : cornerRadius,
-      fields,
-      umlMembers,
+      type: 'custom',
+      position: { x: Math.round(centerX - width / 2), y: Math.round(centerY - height / 2) },
+      style: { width, height },
+      data: {
+        id,
+        type,
+        x: Math.round(centerX - width / 2),
+        y: Math.round(centerY - height / 2),
+        width,
+        height,
+        text,
+        fillColor,
+        strokeColor,
+        strokeWidth: 2,
+        textColor: type === 'er-table' ? '#ffffff' : '#1e293b',
+        fontSize: 13,
+        fontBold: type === 'er-table' || type === 'uml-class' || type === 'card',
+        cornerRadius: type === 'rounded' ? 16 : cornerRadius,
+        fields,
+        umlMembers,
+      },
     };
 
-    updateDoc(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, newNode],
-    }));
+    setNodes(nds => [...nds, newNode]);
     setSelectedNodeIds([id]);
     setSelectedEdgeId(null);
+    commitHistory();
   };
 
-  // Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-        return;
-      }
+  // Drag and Drop from left palette onto React Flow Canvas
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
 
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        if (selectedNodeIds.length > 0) {
-          updateDoc(prev => ({
-            ...prev,
-            nodes: prev.nodes.filter(n => !selectedNodeIds.includes(n.id)),
-            edges: prev.edges.filter(ed => !selectedNodeIds.includes(ed.from) && !selectedNodeIds.includes(ed.to)),
-          }));
-          setSelectedNodeIds([]);
-        } else if (selectedEdgeId) {
-          updateDoc(prev => ({
-            ...prev,
-            edges: prev.edges.filter(ed => ed.id !== selectedEdgeId),
-          }));
-          setSelectedEdgeId(null);
-        }
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) handleRedo();
-        else handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
-        e.preventDefault();
-        handleRedo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        e.preventDefault();
-        setSelectedNodeIds(doc.nodes.map(n => n.id));
-      } else if (e.key === 'Escape') {
-        setSelectedNodeIds([]);
-        setSelectedEdgeId(null);
-        setIsConnecting(false);
-        setEditingNodeId(null);
-      }
-    };
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      const shapeType = event.dataTransfer.getData('application/reactflow') as ShapeType;
+      if (!shapeType) return;
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeIds, selectedEdgeId, doc.nodes, handleUndo, handleRedo, updateDoc]);
-
-  // Pointer Down on Canvas (Pan, Selection box, or Deselect)
-  const handleCanvasPointerDown = (e: React.PointerEvent) => {
-    if (e.button === 1 || e.buttons === 4) {
-      setIsPanning(true);
-      setPanStart({ x: e.clientX - viewport.x, y: e.clientY - viewport.y });
-      return;
-    }
-
-    if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === 'svg') {
-      setSelectedNodeIds([]);
-      setSelectedEdgeId(null);
-      setEditingNodeId(null);
-      const wPoint = screenToWorld(e.clientX, e.clientY);
-      setSelectionBox({
-        startX: wPoint.x,
-        startY: wPoint.y,
-        currentX: wPoint.x,
-        currentY: wPoint.y
+      const position = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
       });
-    }
-  };
 
-  // Pointer Move on Canvas
-  const handleCanvasPointerMove = (e: React.PointerEvent) => {
-    if (isPanning) {
-      setViewport(v => ({
-        ...v,
-        x: e.clientX - panStart.x,
-        y: e.clientY - panStart.y,
-      }));
-      return;
-    }
+      const id = `node-${Date.now().toString().slice(-4)}`;
+      let width = 180;
+      let height = 80;
+      let text = 'New Shape';
+      let cornerRadius = 8;
+      let fillColor = '#eff6ff';
+      let strokeColor = '#2563eb';
 
-    if (isConnecting) {
-      const wPoint = screenToWorld(e.clientX, e.clientY);
-      setConnectionPointer(wPoint);
-      return;
-    }
-
-    if (selectionBox) {
-      const wPoint = screenToWorld(e.clientX, e.clientY);
-      setSelectionBox(sb => sb ? { ...sb, currentX: wPoint.x, currentY: wPoint.y } : null);
-      return;
-    }
-
-    if (isResizing && resizeNodeId.current) {
-      const wPoint = screenToWorld(e.clientX, e.clientY);
-      const init = resizeInitial.current;
-      const handle = resizeHandle.current;
-
-      let newWidth = init.width;
-      let newHeight = init.height;
-      let newX = init.x;
-      let newY = init.y;
-
-      if (handle.includes('e')) newWidth = Math.max(60, wPoint.x - init.x);
-      if (handle.includes('s')) newHeight = Math.max(40, wPoint.y - init.y);
-      if (handle.includes('w')) {
-        const dx = wPoint.x - init.x;
-        newWidth = Math.max(60, init.width - dx);
-        newX = init.x + (init.width - newWidth);
-      }
-      if (handle.includes('n')) {
-        const dy = wPoint.y - init.y;
-        newHeight = Math.max(40, init.height - dy);
-        newY = init.y + (init.height - newHeight);
+      if (shapeType === 'circle') {
+        width = 100; height = 100; text = 'State'; fillColor = '#ecfdf5'; strokeColor = '#059669';
+      } else if (shapeType === 'diamond') {
+        width = 140; height = 100; text = 'Decision?'; fillColor = '#fef3c7'; strokeColor = '#d97706';
+      } else if (shapeType === 'card') {
+        width = 260; height = 150; text = '• Information item 1\n• Information item 2'; fillColor = '#3b82f6'; strokeColor = '#2563eb';
       }
 
-      setDoc(prev => ({
-        ...prev,
-        nodes: prev.nodes.map(n => n.id === resizeNodeId.current ? { ...n, x: newX, y: newY, width: newWidth, height: newHeight } : n)
-      }));
-      return;
-    }
+      const newNode: RFNode<CustomNodeData> = {
+        id,
+        type: 'custom',
+        position: { x: Math.round(position.x - width / 2), y: Math.round(position.y - height / 2) },
+        style: { width, height },
+        data: {
+          id,
+          type: shapeType,
+          x: Math.round(position.x - width / 2),
+          y: Math.round(position.y - height / 2),
+          width,
+          height,
+          text,
+          fillColor,
+          strokeColor,
+          strokeWidth: 2,
+          textColor: '#1e293b',
+          fontSize: 13,
+          cornerRadius,
+        },
+      };
 
-    if (isDraggingNode && selectedNodeIds.length > 0) {
-      const dx = (e.clientX - dragPointerStart.current.x) / viewport.zoom;
-      const dy = (e.clientY - dragPointerStart.current.y) / viewport.zoom;
+      setNodes(nds => [...nds, newNode]);
+      setSelectedNodeIds([id]);
+      setSelectedEdgeId(null);
+      commitHistory();
+    },
+    [screenToFlowPosition, setNodes, commitHistory]
+  );
 
-      setDoc(prev => ({
-        ...prev,
-        nodes: prev.nodes.map(n => {
-          const initPos = dragStartPositions.current.get(n.id);
-          if (!initPos) return n;
-          return {
-            ...n,
-            x: Math.round(initPos.x + dx),
-            y: Math.round(initPos.y + dy),
-          };
-        }),
-      }));
-    }
-  };
-
-  // Pointer Up on Canvas
-  const handleCanvasPointerUp = () => {
-    if (isPanning) setIsPanning(false);
-
-    if (isDraggingNode) {
-      setIsDraggingNode(false);
-      commitToHistory(doc);
-    }
-
-    if (isResizing) {
-      setIsResizing(false);
-      resizeNodeId.current = null;
-      commitToHistory(doc);
-    }
-
-    if (selectionBox) {
-      const x1 = Math.min(selectionBox.startX, selectionBox.currentX);
-      const x2 = Math.max(selectionBox.startX, selectionBox.currentX);
-      const y1 = Math.min(selectionBox.startY, selectionBox.currentY);
-      const y2 = Math.max(selectionBox.startY, selectionBox.currentY);
-
-      const enclosed = doc.nodes
-        .filter(n => n.x >= x1 && n.x + n.width <= x2 && n.y >= y1 && n.y + n.height <= y2)
-        .map(n => n.id);
-
-      setSelectedNodeIds(enclosed);
-      setSelectionBox(null);
-    }
-
-    if (isConnecting) {
-      setIsConnecting(false);
-      connectingSource.current = null;
-      setConnectionPointer(null);
-    }
-  };
-
-  // Node Pointer Down
-  const handleNodePointerDown = (e: React.PointerEvent, nodeId: string) => {
-    e.stopPropagation();
-    if (isConnecting) return;
-
-    if (e.shiftKey) {
-      setSelectedNodeIds(prev => prev.includes(nodeId) ? prev.filter(id => id !== nodeId) : [...prev, nodeId]);
-    } else {
-      if (!selectedNodeIds.includes(nodeId)) {
-        setSelectedNodeIds([nodeId]);
+  // Sync Mermaid preview on code changes
+  useEffect(() => {
+    if (activeTab !== 'mermaid') return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const id = `mermaid-rf-render-${Date.now()}`;
+        const { svg } = await mermaid.render(id, mermaidText);
+        if (!cancelled) {
+          setMermaidSvg(svg);
+          setMermaidError(null);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setMermaidError(err?.message || 'Syntax error in Mermaid specification');
+        }
       }
-    }
-    setSelectedEdgeId(null);
+    }, 300);
 
-    setIsDraggingNode(true);
-    dragPointerStart.current = { x: e.clientX, y: e.clientY };
-    const map = new Map<string, { x: number; y: number }>();
-    doc.nodes.forEach(n => {
-      if (selectedNodeIds.includes(n.id) || n.id === nodeId) {
-        map.set(n.id, { x: n.x, y: n.y });
-      }
-    });
-    dragStartPositions.current = map;
-  };
-
-  // Start connector drag from node handle
-  const handleStartConnect = (e: React.PointerEvent, nodeId: string, anchor: AnchorPosition) => {
-    e.stopPropagation();
-    setIsConnecting(true);
-    connectingSource.current = { nodeId, anchor };
-    const wPoint = screenToWorld(e.clientX, e.clientY);
-    setConnectionPointer(wPoint);
-  };
-
-  // Drop connector on target node
-  const handleDropConnect = (e: React.PointerEvent, targetNodeId: string, targetAnchor: AnchorPosition) => {
-    e.stopPropagation();
-    if (!isConnecting || !connectingSource.current) return;
-    const source = connectingSource.current;
-    if (source.nodeId === targetNodeId) {
-      setIsConnecting(false);
-      return;
-    }
-
-    const newEdge: DiagramEdge = {
-      id: `edge-${Date.now().toString().slice(-4)}`,
-      from: source.nodeId,
-      to: targetNodeId,
-      fromAnchor: source.anchor,
-      toAnchor: targetAnchor,
-      style: 'solid',
-      routing: 'orthogonal',
-      strokeColor: '#4f46e5',
-      strokeWidth: 2,
-      arrowEnd: 'arrow',
-      label: 'relates to',
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
     };
+  }, [mermaidText, activeTab]);
 
-    updateDoc(prev => ({
-      ...prev,
-      edges: [...prev.edges, newEdge],
-    }));
-
-    setIsConnecting(false);
-    connectingSource.current = null;
-    setConnectionPointer(null);
-    setSelectedEdgeId(newEdge.id);
+  // Switch to Mermaid tab
+  const handleSwitchToMermaid = () => {
+    const currentDoc = getLatestDocument();
+    const generated = exportDocumentToMermaid(currentDoc);
+    setMermaidText(generated);
+    setActiveTab('mermaid');
   };
 
-  // Start resize from handle
-  const handleStartResize = (e: React.PointerEvent, nodeId: string, handle: string) => {
-    e.stopPropagation();
-    const node = doc.nodes.find(n => n.id === nodeId);
-    if (!node) return;
-    setIsResizing(true);
-    resizeNodeId.current = nodeId;
-    resizeHandle.current = handle;
-    resizeInitial.current = { x: node.x, y: node.y, width: node.width, height: node.height };
+  // Import Mermaid code into native document and React Flow canvas
+  const handleImportMermaidToCanvas = () => {
+    const res = parseMermaidToDocument(mermaidText);
+    if (!res.success || !res.document) {
+      setMermaidError(res.error || 'Failed to parse Mermaid code');
+      return;
+    }
+    loadDocIntoCanvas(res.document);
+    commitHistory();
+    setActiveTab('visual');
+    setSelectedNodeIds([]);
+    setSelectedEdgeId(null);
+    setImportNotification(`Successfully imported ${res.diagramType || 'diagram'} with ${res.document.nodes.length} nodes and ${res.document.edges.length} connectors into React Flow canvas!`);
+    setTimeout(() => {
+      setImportNotification(null);
+      handleFitView();
+    }, 4000);
   };
 
   // Load a template
   const handleApplyTemplate = (tmpl: TemplateDefinition) => {
     const newDoc = tmpl.createDocument();
-    setDoc(newDoc);
-    commitToHistory(newDoc);
+    loadDocIntoCanvas(newDoc);
+    commitHistory();
     setSelectedNodeIds([]);
     setSelectedEdgeId(null);
     setIsTemplateModalOpen(false);
-    setTimeout(handleFitToScreen, 100);
+    setTimeout(handleFitView, 150);
   };
 
   // Open Native JSON file
@@ -617,11 +482,11 @@ export const DiagramStudio: React.FC = () => {
       try {
         const parsed = JSON.parse(ev.target?.result as string);
         if (parsed.nodes && parsed.edges) {
-          setDoc(parsed);
-          commitToHistory(parsed);
+          loadDocIntoCanvas(parsed);
+          commitHistory();
           setSelectedNodeIds([]);
           setSelectedEdgeId(null);
-          setTimeout(handleFitToScreen, 100);
+          setTimeout(handleFitView, 150);
         } else {
           alert('Invalid diagram file format.');
         }
@@ -633,9 +498,51 @@ export const DiagramStudio: React.FC = () => {
     e.target.value = '';
   };
 
-  // Active elements for inspector
-  const activeNode = selectedNodeIds.length === 1 ? doc.nodes.find(n => n.id === selectedNodeIds[0]) : null;
-  const activeEdge = selectedEdgeId ? doc.edges.find(e => e.id === selectedEdgeId) : null;
+  // Currently selected active node / edge
+  const activeNode = useMemo(() => {
+    if (selectedNodeIds.length !== 1) return null;
+    return nodes.find(n => n.id === selectedNodeIds[0]);
+  }, [selectedNodeIds, nodes]);
+
+  const activeEdge = useMemo(() => {
+    if (!selectedEdgeId) return null;
+    return edges.find(e => e.id === selectedEdgeId);
+  }, [selectedEdgeId, edges]);
+
+  // Update active node properties
+  const updateActiveNodeData = (updates: Partial<DiagramNode>) => {
+    if (!activeNode) return;
+    setNodes(nds => nds.map(n => {
+      if (n.id !== activeNode.id) return n;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          ...updates,
+        },
+      };
+    }));
+    commitHistory();
+  };
+
+  // Update active edge properties
+  const updateActiveEdgeData = (updates: Partial<DiagramEdge>) => {
+    if (!activeEdge) return;
+    setEdges(eds => eds.map(e => {
+      if (e.id !== activeEdge.id) return e;
+      const nextData = { ...e.data, ...updates };
+      let markerEnd = e.markerEnd;
+      if (updates.arrowEnd !== undefined) {
+        markerEnd = updates.arrowEnd === 'arrow' ? { type: MarkerType.ArrowClosed, color: nextData.strokeColor || '#475569' } : undefined;
+      }
+      return {
+        ...e,
+        data: nextData,
+        markerEnd,
+      };
+    }));
+    commitHistory();
+  };
 
   // Filter templates
   const filteredTemplates = DIAGRAM_TEMPLATES.filter(t => {
@@ -655,8 +562,8 @@ export const DiagramStudio: React.FC = () => {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-black uppercase tracking-widest text-slate-800">{doc.title}</span>
-              <span className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 uppercase">Draw.io Platform</span>
+              <span className="text-xs font-black uppercase tracking-widest text-slate-800">{docBase.title}</span>
+              <span className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 uppercase">React Flow Canvas</span>
             </div>
             <p className="text-[10px] text-slate-400 font-semibold">Architecture, ERD, and Mermaid Diagram Studio</p>
           </div>
@@ -731,7 +638,7 @@ export const DiagramStudio: React.FC = () => {
             <FolderOpen size={16} />
           </button>
           <button
-            onClick={() => downloadNativeJson(doc)}
+            onClick={() => downloadNativeJson(getLatestDocument())}
             className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all"
             title="Save .diagram.json Project"
           >
@@ -741,7 +648,7 @@ export const DiagramStudio: React.FC = () => {
           <div className="h-6 w-px bg-slate-200 mx-1" />
 
           <button
-            onClick={() => downloadPng(doc, 2)}
+            onClick={() => downloadPng(getLatestDocument(), 2)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 text-white rounded-xl text-xs font-black shadow-md shadow-cyan-600/20 hover:bg-cyan-700 transition-all"
             title="Export full resolution PNG"
           >
@@ -749,7 +656,7 @@ export const DiagramStudio: React.FC = () => {
             Export PNG
           </button>
           <button
-            onClick={() => downloadSvg(doc)}
+            onClick={() => downloadSvg(getLatestDocument())}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition-all border border-slate-200"
             title="Export editable Vector SVG"
           >
@@ -778,83 +685,99 @@ export const DiagramStudio: React.FC = () => {
               <div>
                 <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-3">Core Flow & Shapes</span>
                 <div className="grid grid-cols-2 gap-2">
-                  <button
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'rectangle')}
                     onClick={() => handleAddShape('rectangle')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <Square size={18} className="text-slate-500" />
                     <span className="text-[10px] font-bold">Process</span>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'diamond')}
                     onClick={() => handleAddShape('diamond')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <Diamond size={18} className="text-amber-500" />
                     <span className="text-[10px] font-bold">Decision</span>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'parallelogram')}
                     onClick={() => handleAddShape('parallelogram')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-purple-400 hover:bg-purple-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-purple-400 hover:bg-purple-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <div className="w-5 h-4 border-2 border-purple-500 -skew-x-12" />
                     <span className="text-[10px] font-bold">Data I/O</span>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'stadium')}
                     onClick={() => handleAddShape('stadium')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <div className="w-6 h-3 rounded-full border-2 border-emerald-500" />
                     <span className="text-[10px] font-bold">Terminal</span>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'cylinder')}
                     onClick={() => handleAddShape('cylinder')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <Database size={18} className="text-slate-500" />
                     <span className="text-[10px] font-bold">Database</span>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'card')}
                     onClick={() => handleAddShape('card')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 text-slate-700 transition-all"
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 text-slate-700 transition-all cursor-grab active:cursor-grabbing"
                   >
                     <div className="w-5 h-4 border-2 border-blue-500 rounded-sm flex flex-col"><div className="h-1 bg-blue-500" /></div>
                     <span className="text-[10px] font-bold">Info Card</span>
-                  </button>
+                  </div>
                 </div>
               </div>
 
               <div>
                 <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-3">Structured Entities</span>
                 <div className="space-y-2">
-                  <button
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'er-table')}
                     onClick={() => handleAddShape('er-table')}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100 text-indigo-950 font-bold text-xs transition-all shadow-sm"
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100 text-indigo-950 font-bold text-xs transition-all shadow-sm cursor-grab active:cursor-grabbing"
                   >
                     <Layers size={18} className="text-indigo-600 shrink-0" />
                     <div className="text-left">
                       <div className="font-black">ER Database Table</div>
                       <div className="text-[10px] text-indigo-600 font-medium">Columns, PK/FK tags & relations</div>
                     </div>
-                  </button>
-                  <button
+                  </div>
+                  <div
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData('application/reactflow', 'uml-class')}
                     onClick={() => handleAddShape('uml-class')}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-slate-400 text-slate-800 font-bold text-xs transition-all"
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-slate-400 text-slate-800 font-bold text-xs transition-all cursor-grab active:cursor-grabbing"
                   >
                     <Layout size={18} className="text-slate-600 shrink-0" />
                     <div className="text-left">
                       <div className="font-black">UML Class Box</div>
                       <div className="text-[10px] text-slate-500 font-medium">Fields, methods & visibility</div>
                     </div>
-                  </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Viewport Scale & Fit-to-screen */}
+              {/* Viewport Scale & Fit-to-screen Controls */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Canvas Zoom</span>
                   <button
-                    onClick={handleFitToScreen}
+                    onClick={handleFitView}
                     className="text-[10px] font-bold text-cyan-600 hover:underline flex items-center gap-1"
                   >
                     <Maximize2 size={11} />
@@ -863,22 +786,26 @@ export const DiagramStudio: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
                   <button
-                    onClick={() => setViewport(v => ({ ...v, zoom: Math.max(0.3, v.zoom - 0.1) }))}
+                    onClick={() => zoomOut({ duration: 150 })}
                     className="p-1 hover:bg-white rounded text-slate-500"
+                    title="Zoom Out"
                   >
                     <ZoomOut size={16} />
                   </button>
-                  <span className="flex-1 text-center font-bold text-xs text-slate-600">{Math.round(viewport.zoom * 100)}%</span>
+                  <span className="flex-1 text-center font-bold text-xs text-slate-600">
+                    {Math.round(getViewport().zoom * 100)}%
+                  </span>
                   <button
-                    onClick={() => setViewport(v => ({ ...v, zoom: Math.min(2.5, v.zoom + 0.1) }))}
+                    onClick={() => zoomIn({ duration: 150 })}
                     className="p-1 hover:bg-white rounded text-slate-500"
+                    title="Zoom In"
                   >
                     <ZoomIn size={16} />
                   </button>
                   <button
-                    onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}
+                    onClick={handleResetZoom}
                     className="p-1 hover:bg-white rounded text-slate-500 text-[10px] font-bold"
-                    title="Reset Zoom"
+                    title="Reset Zoom to 100%"
                   >
                     100%
                   </button>
@@ -887,239 +814,39 @@ export const DiagramStudio: React.FC = () => {
             </div>
 
             <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-semibold">
-              <span>{doc.nodes.length} Elements</span>
-              <span>{doc.edges.length} Connectors</span>
+              <span>{nodes.length} Elements</span>
+              <span>{edges.length} Connectors</span>
             </div>
           </div>
 
-          {/* Central Pannable / Interactive World Canvas */}
-          <div
-            ref={canvasRef}
-            onPointerDown={handleCanvasPointerDown}
-            onPointerMove={handleCanvasPointerMove}
-            onPointerUp={handleCanvasPointerUp}
-            className="flex-1 relative overflow-hidden bg-slate-100 cursor-default"
-            style={{
-              backgroundImage: 'radial-gradient(#cbd5e1 1.2px, transparent 1.2px)',
-              backgroundSize: `${24 * viewport.zoom}px ${24 * viewport.zoom}px`,
-              backgroundPosition: `${viewport.x}px ${viewport.y}px`
-            }}
-          >
-            {/* World Container transformed by pan and zoom */}
-            <div
-              className="absolute inset-0 origin-top-left pointer-events-none"
-              style={{
-                transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+          {/* Central React Flow Canvas */}
+          <div className="flex-1 relative w-full h-full bg-slate-100">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onReconnect={onReconnect}
+              onSelectionChange={onSelectionChange}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              fitView
+              snapToGrid
+              snapGrid={[15, 15]}
+              defaultEdgeOptions={{
+                type: 'custom',
+                markerEnd: {
+                  type: MarkerType.ArrowClosed,
+                  color: '#475569',
+                },
               }}
+              className="bg-slate-100"
             >
-              {/* SVG Edges Layer */}
-              <svg className="absolute inset-0 w-[6000px] h-[6000px] pointer-events-none overflow-visible z-0">
-                <defs>
-                  <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                    <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569" />
-                  </marker>
-                  <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-                    <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" strokeWidth="1.5" fill="none" />
-                  </marker>
-                  <marker id="circle" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                    <circle cx="5" cy="5" r="4" fill="#0ea5e9" />
-                  </marker>
-                </defs>
-
-                {doc.edges.map(e => {
-                  const fromNode = doc.nodes.find(n => n.id === e.from);
-                  const toNode = doc.nodes.find(n => n.id === e.to);
-                  if (!fromNode || !toNode) return null;
-
-                  const fromCenter = { x: fromNode.x + fromNode.width / 2, y: fromNode.y + fromNode.height / 2 };
-                  const toCenter = { x: toNode.x + toNode.width / 2, y: toNode.y + toNode.height / 2 };
-
-                  const start = getNodeAnchorPoint(fromNode, e.fromAnchor || 'auto', toCenter);
-                  const end = getNodeAnchorPoint(toNode, e.toAnchor || 'auto', fromCenter);
-
-                  const { pathData, labelPoint } = computeEdgePath(start, end, e.routing || 'orthogonal', e.waypoints);
-                  const isSelected = selectedEdgeId === e.id;
-                  const dash = e.style === 'dashed' ? '6,4' : e.style === 'dotted' ? '2,4' : undefined;
-                  const marker = e.arrowEnd === 'crowfoot' ? 'url(#crowfoot)' : e.arrowEnd === 'circle' ? 'url(#circle)' : 'url(#arrow)';
-
-                  return (
-                    <g
-                      key={e.id}
-                      className="pointer-events-auto cursor-pointer"
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        setSelectedEdgeId(e.id);
-                        setSelectedNodeIds([]);
-                      }}
-                    >
-                      <path
-                        d={pathData}
-                        fill="none"
-                        stroke="transparent"
-                        strokeWidth={14}
-                      />
-                      <path
-                        d={pathData}
-                        fill="none"
-                        stroke={isSelected ? '#06b6d4' : e.strokeColor}
-                        strokeWidth={isSelected ? e.strokeWidth + 2 : e.strokeWidth}
-                        strokeDasharray={dash}
-                        markerEnd={marker}
-                      />
-                      {e.label && (
-                        <g transform={`translate(${labelPoint.x}, ${labelPoint.y})`}>
-                          <rect
-                            x={-35}
-                            y={-12}
-                            width={70}
-                            height={24}
-                            rx={4}
-                            fill="#ffffff"
-                            stroke={isSelected ? '#06b6d4' : '#cbd5e1'}
-                            strokeWidth={1}
-                          />
-                          <text
-                            x={0}
-                            y={4}
-                            fontSize={10}
-                            fontWeight="bold"
-                            fontFamily="Inter, sans-serif"
-                            fill="#334155"
-                            textAnchor="middle"
-                          >
-                            {e.label}
-                          </text>
-                        </g>
-                      )}
-                    </g>
-                  );
-                })}
-
-                {/* Connecting Line Preview */}
-                {isConnecting && connectingSource.current && connectionPointer && (() => {
-                  const srcNode = doc.nodes.find(n => n.id === connectingSource.current?.nodeId);
-                  if (!srcNode) return null;
-                  const start = getNodeAnchorPoint(srcNode, connectingSource.current.anchor, connectionPointer);
-                  const { pathData } = computeEdgePath(start, connectionPointer, 'orthogonal');
-                  return (
-                    <path
-                      d={pathData}
-                      fill="none"
-                      stroke="#06b6d4"
-                      strokeWidth={2.5}
-                      strokeDasharray="4,4"
-                      markerEnd="url(#arrow)"
-                    />
-                  );
-                })()}
-              </svg>
-
-              {/* Nodes Layer */}
-              {doc.nodes.map(n => {
-                const isSelected = selectedNodeIds.includes(n.id);
-                return (
-                  <div
-                    key={n.id}
-                    onPointerDown={(e) => handleNodePointerDown(e, n.id)}
-                    style={{
-                      transform: `translate3d(${n.x}px, ${n.y}px, 0)`,
-                      width: n.width,
-                      minHeight: n.height,
-                    }}
-                    className={`absolute pointer-events-auto rounded-xl transition-shadow cursor-move group select-none ${
-                      isSelected ? 'ring-2 ring-cyan-500 shadow-2xl z-20' : 'shadow-md hover:shadow-lg z-10'
-                    }`}
-                  >
-                    {/* Anchor Connection Points */}
-                    {(['top', 'bottom', 'left', 'right'] as AnchorPosition[]).map(anchor => {
-                      const posClass =
-                        anchor === 'top' ? '-top-2 left-1/2 -translate-x-1/2' :
-                        anchor === 'bottom' ? '-bottom-2 left-1/2 -translate-x-1/2' :
-                        anchor === 'left' ? 'top-1/2 -left-2 -translate-y-1/2' :
-                        'top-1/2 -right-2 -translate-y-1/2';
-                      return (
-                        <div
-                          key={anchor}
-                          onPointerDown={(e) => handleStartConnect(e, n.id, anchor)}
-                          onPointerUp={(e) => handleDropConnect(e, n.id, anchor)}
-                          className={`absolute ${posClass} w-3.5 h-3.5 bg-white border-2 border-cyan-500 rounded-full cursor-crosshair opacity-0 group-hover:opacity-100 transition-opacity z-30 hover:scale-125 hover:bg-cyan-500`}
-                          title={`Connect from ${anchor}`}
-                        />
-                      );
-                    })}
-
-                    {/* Clean Shape Renderer */}
-                    <ShapeRenderer
-                      node={n}
-                      isEditing={editingNodeId === n.id}
-                      onTextChange={(val) => {
-                        updateDoc(prev => ({
-                          ...prev,
-                          nodes: prev.nodes.map(item => item.id === n.id ? { ...item, text: val } : item)
-                        }), false);
-                      }}
-                      onBlur={() => {
-                        setEditingNodeId(null);
-                        commitToHistory(doc);
-                      }}
-                      onAddCol={() => {
-                        updateDoc(prev => ({
-                          ...prev,
-                          nodes: prev.nodes.map(item => {
-                            if (item.id !== n.id) return item;
-                            return {
-                              ...item,
-                              height: item.height + 26,
-                              fields: [...(item.fields || []), { id: `f-${Date.now()}`, name: 'new_col', type: 'varchar(100)' }]
-                            };
-                          })
-                        }));
-                      }}
-                      onRemoveCol={(idx) => {
-                        updateDoc(prev => ({
-                          ...prev,
-                          nodes: prev.nodes.map(item => {
-                            if (item.id !== n.id || !item.fields) return item;
-                            return {
-                              ...item,
-                              height: Math.max(90, item.height - 26),
-                              fields: item.fields.filter((_, i) => i !== idx)
-                            };
-                          })
-                        }));
-                      }}
-                    />
-
-                    {/* Resize Handles */}
-                    {isSelected && (
-                      <>
-                        <div
-                          onPointerDown={(e) => handleStartResize(e, n.id, 'se')}
-                          className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-cyan-600 rounded-sm cursor-se-resize z-40"
-                        />
-                        <div
-                          onPointerDown={(e) => handleStartResize(e, n.id, 'sw')}
-                          className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-cyan-600 rounded-sm cursor-sw-resize z-40"
-                        />
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-
-              {/* Rubber Band Selection Rectangle */}
-              {selectionBox && (
-                <div
-                  className="absolute border border-cyan-500 bg-cyan-500/10 pointer-events-none z-50"
-                  style={{
-                    left: Math.min(selectionBox.startX, selectionBox.currentX),
-                    top: Math.min(selectionBox.startY, selectionBox.currentY),
-                    width: Math.abs(selectionBox.currentX - selectionBox.startX),
-                    height: Math.abs(selectionBox.currentY - selectionBox.startY),
-                  }}
-                />
-              )}
-            </div>
+              <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#cbd5e1" />
+            </ReactFlow>
           </div>
 
           {/* Right Inspector / Styling Config Pane */}
@@ -1135,31 +862,19 @@ export const DiagramStudio: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Entity Label</label>
                     <textarea
-                      value={activeNode.text}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        updateDoc(prev => ({
-                          ...prev,
-                          nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, text: val } : n)
-                        }));
-                      }}
+                      value={activeNode.data.text}
+                      onChange={(e) => updateActiveNodeData({ text: e.target.value })}
                       rows={2}
                       className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none resize-none"
                     />
                   </div>
 
-                  {activeNode.type === 'card' && (
+                  {activeNode.data.type === 'card' && (
                     <div>
                       <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Card Header Title</label>
                       <input
-                        value={activeNode.headerText || ''}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, headerText: val } : n)
-                          }));
-                        }}
+                        value={activeNode.data.headerText || ''}
+                        onChange={(e) => updateActiveNodeData({ headerText: e.target.value })}
                         className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none"
                       />
                     </div>
@@ -1170,62 +885,44 @@ export const DiagramStudio: React.FC = () => {
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1.5">Typography</label>
                     <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200 mb-2">
                       <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontBold: !n.fontBold } : n)
-                          }));
-                        }}
-                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.fontBold ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        onClick={() => updateActiveNodeData({ fontBold: !activeNode.data.fontBold })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.fontBold ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
                         title="Bold"
                       >
                         <Bold size={14} />
                       </button>
                       <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontItalic: !n.fontItalic } : n)
-                          }));
-                        }}
-                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.fontItalic ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        onClick={() => updateActiveNodeData({ fontItalic: !activeNode.data.fontItalic })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.fontItalic ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
                         title="Italic"
                       >
                         <Italic size={14} />
                       </button>
+                      <button
+                        onClick={() => updateActiveNodeData({ fontUnderline: !activeNode.data.fontUnderline })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.fontUnderline ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Underline"
+                      >
+                        <Underline size={14} />
+                      </button>
                       <div className="h-4 w-px bg-slate-200 mx-1" />
                       <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'left' } : n)
-                          }));
-                        }}
-                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'left' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        onClick={() => updateActiveNodeData({ textAlign: 'left' })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.textAlign === 'left' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
                         title="Align Left"
                       >
                         <AlignLeft size={14} />
                       </button>
                       <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'center' } : n)
-                          }));
-                        }}
-                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'center' || !activeNode.textAlign ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        onClick={() => updateActiveNodeData({ textAlign: 'center' })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.textAlign === 'center' || !activeNode.data.textAlign ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
                         title="Align Center"
                       >
                         <AlignCenter size={14} />
                       </button>
                       <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'right' } : n)
-                          }));
-                        }}
-                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'right' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        onClick={() => updateActiveNodeData({ textAlign: 'right' })}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.data.textAlign === 'right' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
                         title="Align Right"
                       >
                         <AlignRight size={14} />
@@ -1238,17 +935,11 @@ export const DiagramStudio: React.FC = () => {
                         type="range"
                         min="10"
                         max="24"
-                        value={activeNode.fontSize}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontSize: val } : n)
-                          }));
-                        }}
+                        value={activeNode.data.fontSize || 13}
+                        onChange={(e) => updateActiveNodeData({ fontSize: parseInt(e.target.value) })}
                         className="flex-1 accent-cyan-600"
                       />
-                      <span className="text-[10px] font-bold text-slate-600">{activeNode.fontSize}px</span>
+                      <span className="text-[10px] font-bold text-slate-600">{activeNode.data.fontSize || 13}px</span>
                     </div>
                   </div>
 
@@ -1262,16 +953,11 @@ export const DiagramStudio: React.FC = () => {
                       {COLOR_PRESETS.map(c => (
                         <button
                           key={c}
-                          onClick={() => {
-                            updateDoc(prev => ({
-                              ...prev,
-                              nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fillColor: c, strokeColor: c === '#ffffff' ? '#cbd5e1' : c } : n)
-                            }));
-                          }}
+                          onClick={() => updateActiveNodeData({ fillColor: c, strokeColor: c === '#ffffff' ? '#cbd5e1' : c })}
                           style={{ backgroundColor: c }}
                           className="h-6 rounded-md border border-slate-200 shadow-sm flex items-center justify-center transition-transform hover:scale-110"
                         >
-                          {activeNode.fillColor === c && <Check size={11} className={c === '#ffffff' || c === '#f8fafc' ? 'text-slate-800' : 'text-white'} />}
+                          {activeNode.data.fillColor === c && <Check size={11} className={c === '#ffffff' || c === '#f8fafc' ? 'text-slate-800' : 'text-white'} />}
                         </button>
                       ))}
                     </div>
@@ -1280,12 +966,10 @@ export const DiagramStudio: React.FC = () => {
                   {/* Delete Element Button */}
                   <button
                     onClick={() => {
-                      updateDoc(prev => ({
-                        ...prev,
-                        nodes: prev.nodes.filter(n => n.id !== activeNode.id),
-                        edges: prev.edges.filter(e => e.from !== activeNode.id && e.to !== activeNode.id)
-                      }));
+                      setNodes(nds => nds.filter(n => n.id !== activeNode.id));
+                      setEdges(eds => eds.filter(e => e.source !== activeNode.id && e.target !== activeNode.id));
                       setSelectedNodeIds([]);
+                      commitHistory();
                     }}
                     className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5"
                   >
@@ -1299,14 +983,8 @@ export const DiagramStudio: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Relationship Label</label>
                     <input
-                      value={activeEdge.label || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        updateDoc(prev => ({
-                          ...prev,
-                          edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, label: val } : ed)
-                        }));
-                      }}
+                      value={activeEdge.data?.label || ''}
+                      onChange={(e) => updateActiveEdgeData({ label: e.target.value })}
                       className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none"
                     />
                   </div>
@@ -1317,14 +995,9 @@ export const DiagramStudio: React.FC = () => {
                       {(['orthogonal', 'curved', 'straight'] as RoutingType[]).map(rm => (
                         <button
                           key={rm}
-                          onClick={() => {
-                            updateDoc(prev => ({
-                              ...prev,
-                              edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, routing: rm } : ed)
-                            }));
-                          }}
+                          onClick={() => updateActiveEdgeData({ routing: rm })}
                           className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                            activeEdge.routing === rm ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                            activeEdge.data?.routing === rm ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
                           }`}
                         >
                           {rm}
@@ -1339,14 +1012,9 @@ export const DiagramStudio: React.FC = () => {
                       {(['solid', 'dashed', 'dotted'] as ArrowStyle[]).map(st => (
                         <button
                           key={st}
-                          onClick={() => {
-                            updateDoc(prev => ({
-                              ...prev,
-                              edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, style: st } : ed)
-                            }));
-                          }}
+                          onClick={() => updateActiveEdgeData({ style: st })}
                           className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                            activeEdge.style === st ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                            activeEdge.data?.style === st ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
                           }`}
                         >
                           {st}
@@ -1357,11 +1025,9 @@ export const DiagramStudio: React.FC = () => {
 
                   <button
                     onClick={() => {
-                      updateDoc(prev => ({
-                        ...prev,
-                        edges: prev.edges.filter(ed => ed.id !== activeEdge.id)
-                      }));
+                      setEdges(eds => eds.filter(ed => ed.id !== activeEdge.id));
                       setSelectedEdgeId(null);
+                      commitHistory();
                     }}
                     className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5"
                   >
@@ -1377,9 +1043,9 @@ export const DiagramStudio: React.FC = () => {
             </div>
 
             <div className="p-4 bg-cyan-50/70 rounded-2xl border border-cyan-100">
-              <span className="text-[10px] font-black text-cyan-800 uppercase tracking-wider block mb-1">Canvas Shortcuts</span>
+              <span className="text-[10px] font-black text-cyan-800 uppercase tracking-wider block mb-1">React Flow Canvas</span>
               <p className="text-[10px] text-cyan-700 leading-relaxed">
-                Hover over any node to see connection anchors. Drag an anchor to another node to connect. Double-click to edit text.
+                Drag from any anchor port to connect. Drag nodes smoothly. Use selection rectangle or Shift+click for multi-selection.
               </p>
             </div>
           </div>
@@ -1391,7 +1057,7 @@ export const DiagramStudio: React.FC = () => {
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-mono text-cyan-400 font-bold uppercase tracking-wider">Mermaid.js Code Editor</span>
               <button
-                onClick={() => setMermaidText(exportDocumentToMermaid(doc))}
+                onClick={() => setMermaidText(exportDocumentToMermaid(getLatestDocument()))}
                 className="text-xs text-slate-400 hover:text-white flex items-center gap-1 font-semibold"
                 title="Regenerate code from the visual canvas"
               >
@@ -1508,5 +1174,13 @@ export const DiagramStudio: React.FC = () => {
         </div>
       )}
     </div>
+  );
+};
+
+export const DiagramStudio: React.FC = () => {
+  return (
+    <ReactFlowProvider>
+      <DiagramStudioCanvas />
+    </ReactFlowProvider>
   );
 };

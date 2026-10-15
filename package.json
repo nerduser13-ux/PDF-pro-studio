@@ -10,6 +10,7 @@
     "electron": "electron ."
   },
   "dependencies": {
+    "@xyflow/react": "^12.12.0",
     "fabric": "^6.6.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.562.0",
