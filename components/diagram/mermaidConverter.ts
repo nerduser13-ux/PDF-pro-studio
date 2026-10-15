@@ -9,6 +9,33 @@ export interface MermaidParseResult {
 }
 
 /**
+ * Sanitizes and cleans Mermaid labels by replacing HTML-style line breaks (<br/>, <br>, <br />)
+ * with actual newlines, decoding HTML entities, and trimming quotes.
+ */
+export function cleanMermaidLabel(raw: string): string {
+  if (!raw) return '';
+  let str = raw.trim();
+
+  // Strip leading/trailing surrounding quotes
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1);
+  }
+
+  // Convert HTML line breaks to real newlines
+  str = str.replace(/<br\s*\/?>/gi, '\n');
+  str = str.replace(/\\n/g, '\n');
+
+  // Decode standard HTML entities
+  str = str.replace(/&amp;/g, '&');
+  str = str.replace(/&lt;/g, '<');
+  str = str.replace(/&gt;/g, '>');
+  str = str.replace(/&quot;/g, '"');
+  str = str.replace(/&#39;/g, "'");
+
+  return str;
+}
+
+/**
  * Parses Mermaid code and converts into an editable DiagramDocument
  * Supports:
  * - Flowcharts / Graph (graph TD, flowchart LR, etc.)
@@ -67,7 +94,7 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
 
     // Match edge patterns:
     // e.g. A["Text"] --> B{"Text"}, B -->|"Yes"| C["Text"], B -.->|"No"| D["Text"]
-    const edgeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\))?)\s*(-->|--\s*".*?"\s*-->|--\s*.*?\s*-->|-\.->|==>|--)(?:\|"?(.*?)"?\|)?\s*([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\))?)/);
+    const edgeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)\s*(-->|--\s*".*?"\s*-->|--\s*.*?\s*-->|-\.->|==>|--)(?:\|"?(.*?)"?\|)?\s*([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)/);
 
     if (edgeMatch) {
       const rawSource = edgeMatch[1];
@@ -79,11 +106,11 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
       const targetNode = parseOrCreateNode(rawTarget, nodesMap);
 
       // Parse edge label and style
-      let label: string | undefined = pipeLabel?.trim();
+      let label: string | undefined = pipeLabel ? cleanMermaidLabel(pipeLabel) : undefined;
       if (!label) {
         const labelMatch = rawConnector.match(/--\s*"?([^"-]+)"?\s*-->/);
         if (labelMatch) {
-          label = labelMatch[1].trim();
+          label = cleanMermaidLabel(labelMatch[1]);
         }
       }
 
@@ -111,7 +138,7 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
       });
     } else {
       // Standalone node definition: NodeId[Label]
-      const nodeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\))?)$/);
+      const nodeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)$/);
       if (nodeMatch) {
         parseOrCreateNode(nodeMatch[1], nodesMap);
       }
@@ -148,12 +175,26 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
   let fillColor = '#ffffff';
   let strokeColor = '#3b82f6';
 
-  // Check brackets: [Text] -> rectangle, (Text) -> rounded, ((Text)) -> circle, {Text} -> diamond, [(Text)] -> cylinder
+  // Check brackets:
+  // [("Text")] -> cylinder
+  // (["Text"]) -> stadium
+  // (("Text")) -> circle
+  // {"Text"} -> diamond
+  // [/"Text"/] -> parallelogram
+  // ("Text") -> rounded
+  // ["Text"] -> rectangle
   if (raw.includes('[(') && raw.includes(')]')) {
     id = raw.substring(0, raw.indexOf('[(')).trim();
     text = raw.substring(raw.indexOf('[(') + 2, raw.lastIndexOf(')]')).trim();
     type = 'cylinder';
     fillColor = '#eff6ff';
+  } else if (raw.includes('([') && raw.includes('])')) {
+    id = raw.substring(0, raw.indexOf('([')).trim();
+    text = raw.substring(raw.indexOf('([') + 2, raw.lastIndexOf('])')).trim();
+    type = 'stadium';
+    fillColor = '#f0fdf4';
+    strokeColor = '#16a34a';
+    cornerRadius = 24;
   } else if (raw.includes('((') && raw.includes('))')) {
     id = raw.substring(0, raw.indexOf('((')).trim();
     text = raw.substring(raw.indexOf('((') + 2, raw.lastIndexOf('))')).trim();
@@ -166,6 +207,12 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
     type = 'diamond';
     fillColor = '#fef3c7';
     strokeColor = '#f59e0b';
+  } else if (raw.includes('[/') && raw.includes('/]')) {
+    id = raw.substring(0, raw.indexOf('[/')).trim();
+    text = raw.substring(raw.indexOf('[/') + 2, raw.lastIndexOf('/]')).trim();
+    type = 'parallelogram';
+    fillColor = '#f3e8ff';
+    strokeColor = '#9333ea';
   } else if (raw.includes('(') && raw.includes(')')) {
     id = raw.substring(0, raw.indexOf('(')).trim();
     text = raw.substring(raw.indexOf('(') + 1, raw.lastIndexOf(')')).trim();
@@ -179,8 +226,8 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
     fillColor = '#ffffff';
   }
 
-  // Remove quotes around label if present
-  text = text.replace(/^"/, '').replace(/"$/, '');
+  // Clean HTML line breaks and quotes
+  text = cleanMermaidLabel(text);
 
   const existing = nodesMap.get(id);
   if (existing) {
@@ -194,13 +241,19 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
     return existing;
   }
 
+  // Estimate node size based on text lines
+  const textLines = text.split('\n');
+  const maxLineLen = Math.max(...textLines.map(l => l.length));
+  const estimatedWidth = Math.max(type === 'diamond' ? 150 : 160, maxLineLen * 9 + 40);
+  const estimatedHeight = Math.max(type === 'diamond' ? 110 : 80, textLines.length * 22 + 40);
+
   const newNode: DiagramNode = {
     id,
     type,
     x: 0,
     y: 0,
-    width: type === 'circle' ? 100 : type === 'diamond' ? 140 : 160,
-    height: type === 'circle' ? 100 : type === 'diamond' ? 100 : 80,
+    width: type === 'circle' ? 110 : estimatedWidth,
+    height: type === 'circle' ? 110 : estimatedHeight,
     text,
     fillColor,
     strokeColor,
@@ -244,8 +297,8 @@ function parseErDiagram(lines: string[]): MermaidParseResult {
         const isFk = line.toUpperCase().includes(' FK');
         currentTable.fields?.push({
           id: `col-${currentTable.fields.length + 1}`,
-          name,
-          type,
+          name: cleanMermaidLabel(name),
+          type: cleanMermaidLabel(type),
           isPk,
           isFk,
         });
@@ -292,7 +345,7 @@ function parseErDiagram(lines: string[]): MermaidParseResult {
       const relLine = relMatch[3];
       const rightCard = relMatch[4];
       const toName = relMatch[5].toUpperCase();
-      const label = relMatch[6]?.trim();
+      const label = relMatch[6] ? cleanMermaidLabel(relMatch[6]) : undefined;
 
       const getOrCreateTable = (name: string): DiagramNode => {
         let t = tablesMap.get(name);
@@ -330,7 +383,7 @@ function parseErDiagram(lines: string[]): MermaidParseResult {
         id: `er-edge-${edges.length + 1}`,
         from: source.id,
         to: target.id,
-        label: label || undefined,
+        label,
         style: isDashed ? 'dashed' : 'solid',
         routing: 'orthogonal',
         strokeColor: source.fillColor,
@@ -376,7 +429,7 @@ function parseClassDiagram(lines: string[]): MermaidParseResult {
         continue;
       }
       const vis = line[0] === '+' || line[0] === '-' || line[0] === '#' ? (line[0] as any) : '+';
-      const cleanMember = line.replace(/^[+\-#~]\s*/, '');
+      const cleanMember = cleanMermaidLabel(line.replace(/^[+\-#~]\s*/, ''));
       const isMethod = cleanMember.includes('(');
       currentClass.umlMembers?.push({
         id: `m-${currentClass.umlMembers.length + 1}`,
@@ -488,7 +541,7 @@ function parseStateDiagram(lines: string[]): MermaidParseResult {
     if (transMatch) {
       let from = transMatch[1];
       let to = transMatch[2];
-      const label = transMatch[3]?.trim();
+      const label = transMatch[3] ? cleanMermaidLabel(transMatch[3]) : undefined;
 
       const getOrCreateState = (name: string): DiagramNode => {
         if (name === '[*]') {
@@ -522,7 +575,7 @@ function parseStateDiagram(lines: string[]): MermaidParseResult {
             y: 0,
             width: 150,
             height: 70,
-            text: name,
+            text: cleanMermaidLabel(name),
             fillColor: '#eff6ff',
             strokeColor: '#2563eb',
             strokeWidth: 2,
@@ -577,8 +630,8 @@ function applyAutoLayout(nodes: DiagramNode[], edges: DiagramEdge[], isHorizonta
   if (nodes.length === 0) return;
 
   const cols = isHorizontal ? Math.max(2, Math.ceil(Math.sqrt(nodes.length))) : Math.min(3, nodes.length);
-  const colSpacing = 300;
-  const rowSpacing = 200;
+  const colSpacing = 320;
+  const rowSpacing = 220;
   const startX = 100;
   const startY = 100;
 
@@ -622,13 +675,17 @@ export function exportDocumentToMermaid(doc: DiagramDocument): string {
   // Default to flowchart TD
   let out = 'flowchart TD\n';
   doc.nodes.forEach(n => {
-    const safeText = n.text.replace(/\n/g, '<br/>');
+    const safeText = n.text.replace(/\n/g, '<br/>').replace(/"/g, '&quot;');
     if (n.type === 'circle') {
       out += `    ${n.id}(("${safeText}"))\n`;
     } else if (n.type === 'diamond') {
       out += `    ${n.id}{"${safeText}"}\n`;
     } else if (n.type === 'cylinder') {
       out += `    ${n.id}[("${safeText}")]\n`;
+    } else if (n.type === 'stadium') {
+      out += `    ${n.id}(["${safeText}"])\n`;
+    } else if (n.type === 'parallelogram') {
+      out += `    ${n.id}[/"${safeText}"/]\n`;
     } else if (n.type === 'rounded') {
       out += `    ${n.id}("${safeText}")\n`;
     } else {

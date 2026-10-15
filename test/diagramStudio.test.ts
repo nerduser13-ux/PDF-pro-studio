@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMermaidToDocument, exportDocumentToMermaid } from '../components/diagram/mermaidConverter';
+import { parseMermaidToDocument, exportDocumentToMermaid, cleanMermaidLabel } from '../components/diagram/mermaidConverter';
 import { DIAGRAM_TEMPLATES } from '../components/diagram/templates';
 import { exportDocumentToSvg } from '../components/diagram/exportUtils';
 import { getNodeAnchorPoint, computeEdgePath } from '../components/diagram/geometry';
@@ -49,15 +49,15 @@ describe('Diagram Studio Engine Tests', () => {
     // Path calculation
     const { pathData, labelPoint } = computeEdgePath(startPt, endPt, 'orthogonal');
     expect(pathData).toContain('M 300 150');
-    expect(pathData).toContain('350'); // midpoint orthogonal step
+    expect(pathData).toContain('350');
     expect(labelPoint.x).toBe(350);
   });
 
-  it('Scenario B: Mermaid Flowchart Import & Round-trip', () => {
+  it('Scenario B: Mermaid Flowchart Import & Clean Line Breaks (No <br/>)', () => {
     const mermaidCode = `flowchart TD
-    A["User Request"] --> B{"Is Valid?"}
+    A["User Request<br/>Initiated"] --> B{"Is Valid?"}
     B -->|"Yes"| C["Process Order"]
-    B -.->|"No"| D["Reject"]`;
+    B -.->|"No"| D[/"Reject<br />Data"/]`;
 
     const res = parseMermaidToDocument(mermaidCode);
     expect(res.success).toBe(true);
@@ -65,9 +65,17 @@ describe('Diagram Studio Engine Tests', () => {
     expect(res.document?.nodes.length).toBe(4);
     expect(res.document?.edges.length).toBe(3);
 
-    // Verify converted types
+    // Verify converted types & no literal <br/>
+    const nodeA = res.document?.nodes.find(n => n.id === 'A');
+    expect(nodeA?.text).not.toContain('<br/>');
+    expect(nodeA?.text).toContain('\n');
+
     const decisionNode = res.document?.nodes.find(n => n.id === 'B');
     expect(decisionNode?.type).toBe('diamond');
+
+    const parallelogramNode = res.document?.nodes.find(n => n.id === 'D');
+    expect(parallelogramNode?.type).toBe('parallelogram');
+    expect(parallelogramNode?.text).not.toContain('<br />');
 
     // Roundtrip export
     if (res.document) {
@@ -100,18 +108,31 @@ describe('Diagram Studio Engine Tests', () => {
     expect(userTable?.fields?.[0].isPk).toBe(true);
   });
 
-  it('Scenario D: Templates Instantiation & SVG Export', () => {
-    const swotTemplate = DIAGRAM_TEMPLATES.find(t => t.id === 'swot-analysis');
-    expect(swotTemplate).toBeDefined();
+  it('Scenario D: Templates Instantiation (SWOT & PESTEL Infographics)', () => {
+    const pestelTemplate = DIAGRAM_TEMPLATES.find(t => t.id === 'pestel-infographic');
+    expect(pestelTemplate).toBeDefined();
 
-    const doc = swotTemplate!.createDocument();
-    expect(doc.nodes.length).toBe(5);
+    const doc = pestelTemplate!.createDocument();
+    expect(doc.nodes.length).toBe(7); // 1 central capsule + 6 cards
+    expect(doc.edges.length).toBe(6);
 
-    // Export SVG must contain all quadrants
+    const pCard = doc.nodes.find(n => n.id === 'pestel-p');
+    expect(pCard?.type).toBe('card');
+    expect(pCard?.headerText).toBe('POLITICAL');
+    expect(pCard?.badgeText).toBe('P');
+    expect(pCard?.iconName).toBe('building');
+
+    // Export SVG must contain all nodes & headers
     const svg = exportDocumentToSvg(doc);
     expect(svg).toContain('<svg');
-    expect(svg).toContain('STRATEGIC SWOT MATRIX');
-    expect(svg).toContain('STRENGTHS (Internal)');
-    expect(svg).toContain('WEAKNESSES (Internal)');
+    expect(svg).toContain('PESTEL');
+    expect(svg).toContain('POLITICAL');
+    expect(svg).toContain('ECONOMICAL');
+  });
+
+  it('Scenario E: Label sanitization function', () => {
+    expect(cleanMermaidLabel('Test<br/>Line 2')).toBe('Test\nLine 2');
+    expect(cleanMermaidLabel('"Quoted string"')).toBe('Quoted string');
+    expect(cleanMermaidLabel('&amp; &lt; &gt;')).toBe('& < >');
   });
 });

@@ -35,6 +35,7 @@ import {
   AlignRight,
   Bold,
   Italic,
+  Underline,
   Eye,
   Grid,
   FileText,
@@ -58,22 +59,28 @@ import { getNodeAnchorPoint, computeEdgePath } from '../diagram/geometry';
 import { DIAGRAM_TEMPLATES, TemplateDefinition } from '../diagram/templates';
 import { parseMermaidToDocument, exportDocumentToMermaid } from '../diagram/mermaidConverter';
 import { downloadPng, downloadSvg, downloadNativeJson } from '../diagram/exportUtils';
+import { loadActiveDiagram, saveActiveDiagram } from '../diagram/persistence';
+import { ShapeRenderer } from '../diagram/ShapeRenderer';
 
 const COLOR_PRESETS = [
   '#4f46e5', '#2563eb', '#0284c7', '#0d9488',
-  '#059669', '#16a34a', '#d97706', '#ea580c',
-  '#e11d48', '#9333ea', '#475569', '#0f172a',
-  '#ffffff', '#f8fafc', '#ecfdf5', '#eff6ff', '#fef3c7', '#fff1f2'
+  '#059669', '#16a34a', '#84cc16', '#d97706',
+  '#f97316', '#e11d48', '#ec4899', '#9333ea',
+  '#8b5cf6', '#475569', '#0f172a', '#ffffff',
+  '#f8fafc', '#ecfdf5', '#eff6ff', '#fef3c7', '#fff1f2'
 ];
 
-const INITIAL_DOC: DiagramDocument = DIAGRAM_TEMPLATES[0].createDocument();
-
 export const DiagramStudio: React.FC = () => {
-  // Primary Diagram State (Single source of truth)
-  const [doc, setDoc] = useState<DiagramDocument>(INITIAL_DOC);
+  // Primary Diagram State (Single source of truth with LocalStorage persistence)
+  const [doc, setDoc] = useState<DiagramDocument>(() => loadActiveDiagram());
+
+  // Autosave whenever document changes
+  useEffect(() => {
+    saveActiveDiagram(doc);
+  }, [doc]);
 
   // Undo / Redo History Stack
-  const historyStack = useRef<DiagramDocument[]>([INITIAL_DOC]);
+  const historyStack = useRef<DiagramDocument[]>([doc]);
   const redoStack = useRef<DiagramDocument[]>([]);
   const isUndoRedoAction = useRef(false);
 
@@ -170,14 +177,32 @@ export const DiagramStudio: React.FC = () => {
     isUndoRedoAction.current = false;
   }, []);
 
-  // Initialize Mermaid
-  useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'default',
-      securityLevel: 'loose',
+  // Fit diagram to screen
+  const handleFitToScreen = useCallback(() => {
+    if (doc.nodes.length === 0 || !canvasRef.current) {
+      setViewport({ x: 0, y: 0, zoom: 1 });
+      return;
+    }
+    const padding = 60;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    doc.nodes.forEach(n => {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.width);
+      maxY = Math.max(maxY, n.y + n.height);
     });
-  }, []);
+
+    const w = maxX - minX + padding * 2;
+    const h = maxY - minY + padding * 2;
+    const cw = canvasRef.current.clientWidth;
+    const ch = canvasRef.current.clientHeight;
+
+    const scale = Math.min(2.0, Math.max(0.3, Math.min(cw / w, ch / h)));
+    const centerX = (cw - w * scale) / 2 - (minX - padding) * scale;
+    const centerY = (ch - h * scale) / 2 - (minY - padding) * scale;
+
+    setViewport({ x: centerX, y: centerY, zoom: scale });
+  }, [doc.nodes]);
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
@@ -213,7 +238,7 @@ export const DiagramStudio: React.FC = () => {
     };
   }, [mermaidText, activeTab]);
 
-  // Switch to Mermaid tab: serialize current document
+  // Switch to Mermaid tab
   const handleSwitchToMermaid = () => {
     const generated = exportDocumentToMermaid(doc);
     setMermaidText(generated);
@@ -233,12 +258,14 @@ export const DiagramStudio: React.FC = () => {
     setSelectedNodeIds([]);
     setSelectedEdgeId(null);
     setImportNotification(`Successfully imported ${res.diagramType || 'diagram'} with ${res.document.nodes.length} nodes and ${res.document.edges.length} connectors into the canvas!`);
-    setTimeout(() => setImportNotification(null), 4000);
+    setTimeout(() => {
+      setImportNotification(null);
+      handleFitToScreen();
+    }, 4000);
   };
 
   // Add new Shape Node from palette
   const handleAddShape = (type: ShapeType) => {
-    // Drop at viewport center or offset
     const centerWorld = screenToWorld(
       (canvasRef.current?.clientWidth || 800) / 2,
       (canvasRef.current?.clientHeight || 600) / 2
@@ -258,10 +285,16 @@ export const DiagramStudio: React.FC = () => {
       width = 100; height = 100; text = 'State'; fillColor = '#ecfdf5'; strokeColor = '#059669';
     } else if (type === 'diamond') {
       width = 140; height = 100; text = 'Decision?'; fillColor = '#fef3c7'; strokeColor = '#d97706';
+    } else if (type === 'parallelogram') {
+      width = 160; height = 80; text = 'Data I/O'; fillColor = '#f3e8ff'; strokeColor = '#9333ea';
+    } else if (type === 'stadium') {
+      width = 150; height = 65; text = 'Terminal'; fillColor = '#f0fdf4'; strokeColor = '#16a34a'; cornerRadius = 30;
     } else if (type === 'cylinder') {
       width = 150; height = 110; text = 'Database Storage'; fillColor = '#f0fdf4'; strokeColor = '#16a34a';
     } else if (type === 'sticky') {
       width = 160; height = 120; text = 'Note / Idea'; fillColor = '#fef9c3'; strokeColor = '#ca8a04';
+    } else if (type === 'card') {
+      width = 260; height = 150; text = '• Information item 1\n• Information item 2'; fillColor = '#3b82f6'; strokeColor = '#2563eb';
     } else if (type === 'text') {
       width = 140; height = 50; text = 'Text block'; fillColor = 'transparent'; strokeColor = 'transparent';
     } else if (type === 'swimlane') {
@@ -294,7 +327,7 @@ export const DiagramStudio: React.FC = () => {
       strokeWidth: 2,
       textColor: type === 'er-table' ? '#ffffff' : '#1e293b',
       fontSize: 12,
-      fontBold: type === 'er-table' || type === 'uml-class',
+      fontBold: type === 'er-table' || type === 'uml-class' || type === 'card',
       cornerRadius: type === 'rounded' ? 16 : cornerRadius,
       fields,
       umlMembers,
@@ -308,10 +341,9 @@ export const DiagramStudio: React.FC = () => {
     setSelectedEdgeId(null);
   };
 
-  // Keyboard Shortcuts (Delete, Undo, Redo, Zoom, Copy, Paste)
+  // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept when user is typing in input or textarea
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
         return;
@@ -358,7 +390,6 @@ export const DiagramStudio: React.FC = () => {
   // Pointer Down on Canvas (Pan, Selection box, or Deselect)
   const handleCanvasPointerDown = (e: React.PointerEvent) => {
     if (e.button === 1 || e.buttons === 4) {
-      // Middle click: Pan
       setIsPanning(true);
       setPanStart({ x: e.clientX - viewport.x, y: e.clientY - viewport.y });
       return;
@@ -368,7 +399,6 @@ export const DiagramStudio: React.FC = () => {
       setSelectedNodeIds([]);
       setSelectedEdgeId(null);
       setEditingNodeId(null);
-      // Start rubber band selection box
       const wPoint = screenToWorld(e.clientX, e.clientY);
       setSelectionBox({
         startX: wPoint.x,
@@ -487,7 +517,7 @@ export const DiagramStudio: React.FC = () => {
     }
   };
 
-  // Node Pointer Down (start drag or select)
+  // Node Pointer Down
   const handleNodePointerDown = (e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     if (isConnecting) return;
@@ -501,7 +531,6 @@ export const DiagramStudio: React.FC = () => {
     }
     setSelectedEdgeId(null);
 
-    // Initialize dragging
     setIsDraggingNode(true);
     dragPointerStart.current = { x: e.clientX, y: e.clientY };
     const map = new Map<string, { x: number; y: number }>();
@@ -576,6 +605,7 @@ export const DiagramStudio: React.FC = () => {
     setSelectedNodeIds([]);
     setSelectedEdgeId(null);
     setIsTemplateModalOpen(false);
+    setTimeout(handleFitToScreen, 100);
   };
 
   // Open Native JSON file
@@ -591,6 +621,7 @@ export const DiagramStudio: React.FC = () => {
           commitToHistory(parsed);
           setSelectedNodeIds([]);
           setSelectedEdgeId(null);
+          setTimeout(handleFitToScreen, 100);
         } else {
           alert('Invalid diagram file format.');
         }
@@ -602,11 +633,11 @@ export const DiagramStudio: React.FC = () => {
     e.target.value = '';
   };
 
-  // Selected elements for inspector
+  // Active elements for inspector
   const activeNode = selectedNodeIds.length === 1 ? doc.nodes.find(n => n.id === selectedNodeIds[0]) : null;
   const activeEdge = selectedEdgeId ? doc.edges.find(e => e.id === selectedEdgeId) : null;
 
-  // Filter templates in modal
+  // Filter templates
   const filteredTemplates = DIAGRAM_TEMPLATES.filter(t => {
     const matchesCat = templateCategory === 'All' || t.category === templateCategory;
     const matchesSearch = t.title.toLowerCase().includes(templateSearch.toLowerCase()) ||
@@ -653,11 +684,11 @@ export const DiagramStudio: React.FC = () => {
           </button>
         </div>
 
-        {/* Top Action Toolbar (Templates, Undo, Redo, Save, Export) */}
+        {/* Top Action Toolbar */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsTemplateModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-bold transition-all border border-indigo-200"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-bold transition-all border border-indigo-200 shadow-sm"
             title="Browse pre-built diagram templates"
           >
             <Sparkles size={14} />
@@ -685,7 +716,6 @@ export const DiagramStudio: React.FC = () => {
 
           <div className="h-6 w-px bg-slate-200 mx-1" />
 
-          {/* Open / Save / Export */}
           <input
             type="file"
             ref={fileInputRef}
@@ -742,7 +772,7 @@ export const DiagramStudio: React.FC = () => {
       {/* Main Studio Viewport */}
       {activeTab === 'visual' ? (
         <div className="flex-1 flex overflow-hidden relative">
-          {/* Left Shape Palette (Categorized Library) */}
+          {/* Left Shape Palette */}
           <div className="w-64 bg-white border-r border-slate-200 p-4 flex flex-col justify-between shrink-0 overflow-y-auto custom-scrollbar z-10">
             <div className="space-y-6">
               <div>
@@ -756,25 +786,25 @@ export const DiagramStudio: React.FC = () => {
                     <span className="text-[10px] font-bold">Process</span>
                   </button>
                   <button
-                    onClick={() => handleAddShape('rounded')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
-                  >
-                    <div className="w-5 h-5 rounded-lg border-2 border-slate-500" />
-                    <span className="text-[10px] font-bold">Rounded</span>
-                  </button>
-                  <button
-                    onClick={() => handleAddShape('circle')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
-                  >
-                    <Circle size={18} className="text-slate-500" />
-                    <span className="text-[10px] font-bold">Terminal / State</span>
-                  </button>
-                  <button
                     onClick={() => handleAddShape('diamond')}
                     className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <Diamond size={18} className="text-slate-500" />
+                    <Diamond size={18} className="text-amber-500" />
                     <span className="text-[10px] font-bold">Decision</span>
+                  </button>
+                  <button
+                    onClick={() => handleAddShape('parallelogram')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-purple-400 hover:bg-purple-50/50 text-slate-700 transition-all"
+                  >
+                    <div className="w-5 h-4 border-2 border-purple-500 -skew-x-12" />
+                    <span className="text-[10px] font-bold">Data I/O</span>
+                  </button>
+                  <button
+                    onClick={() => handleAddShape('stadium')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 text-slate-700 transition-all"
+                  >
+                    <div className="w-6 h-3 rounded-full border-2 border-emerald-500" />
+                    <span className="text-[10px] font-bold">Terminal</span>
                   </button>
                   <button
                     onClick={() => handleAddShape('cylinder')}
@@ -784,11 +814,11 @@ export const DiagramStudio: React.FC = () => {
                     <span className="text-[10px] font-bold">Database</span>
                   </button>
                   <button
-                    onClick={() => handleAddShape('sticky')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-amber-400 hover:bg-amber-50/50 text-slate-700 transition-all"
+                    onClick={() => handleAddShape('card')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 text-slate-700 transition-all"
                   >
-                    <FileText size={18} className="text-amber-500" />
-                    <span className="text-[10px] font-bold">Sticky Note</span>
+                    <div className="w-5 h-4 border-2 border-blue-500 rounded-sm flex flex-col"><div className="h-1 bg-blue-500" /></div>
+                    <span className="text-[10px] font-bold">Info Card</span>
                   </button>
                 </div>
               </div>
@@ -816,22 +846,21 @@ export const DiagramStudio: React.FC = () => {
                       <div className="text-[10px] text-slate-500 font-medium">Fields, methods & visibility</div>
                     </div>
                   </button>
-                  <button
-                    onClick={() => handleAddShape('swimlane')}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-slate-400 text-slate-800 font-bold text-xs transition-all"
-                  >
-                    <Square size={18} className="text-slate-600 shrink-0" />
-                    <div className="text-left">
-                      <div className="font-black">Swimlane Container</div>
-                      <div className="text-[10px] text-slate-500 font-medium">Group stages & Kanban lanes</div>
-                    </div>
-                  </button>
                 </div>
               </div>
 
-              {/* Viewport Scale & Canvas Settings */}
+              {/* Viewport Scale & Fit-to-screen */}
               <div>
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-2">Canvas Zoom</span>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Canvas Zoom</span>
+                  <button
+                    onClick={handleFitToScreen}
+                    className="text-[10px] font-bold text-cyan-600 hover:underline flex items-center gap-1"
+                  >
+                    <Maximize2 size={11} />
+                    Fit Screen
+                  </button>
+                </div>
                 <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
                   <button
                     onClick={() => setViewport(v => ({ ...v, zoom: Math.max(0.3, v.zoom - 0.1) }))}
@@ -884,13 +913,16 @@ export const DiagramStudio: React.FC = () => {
               }}
             >
               {/* SVG Edges Layer */}
-              <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none overflow-visible z-0">
+              <svg className="absolute inset-0 w-[6000px] h-[6000px] pointer-events-none overflow-visible z-0">
                 <defs>
                   <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                     <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569" />
                   </marker>
                   <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
                     <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" strokeWidth="1.5" fill="none" />
+                  </marker>
+                  <marker id="circle" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <circle cx="5" cy="5" r="4" fill="#0ea5e9" />
                   </marker>
                 </defs>
 
@@ -908,7 +940,7 @@ export const DiagramStudio: React.FC = () => {
                   const { pathData, labelPoint } = computeEdgePath(start, end, e.routing || 'orthogonal', e.waypoints);
                   const isSelected = selectedEdgeId === e.id;
                   const dash = e.style === 'dashed' ? '6,4' : e.style === 'dotted' ? '2,4' : undefined;
-                  const marker = e.arrowEnd === 'crowfoot' ? 'url(#crowfoot)' : 'url(#arrow)';
+                  const marker = e.arrowEnd === 'crowfoot' ? 'url(#crowfoot)' : e.arrowEnd === 'circle' ? 'url(#circle)' : 'url(#arrow)';
 
                   return (
                     <g
@@ -920,14 +952,12 @@ export const DiagramStudio: React.FC = () => {
                         setSelectedNodeIds([]);
                       }}
                     >
-                      {/* Thick transparent hit-area */}
                       <path
                         d={pathData}
                         fill="none"
                         stroke="transparent"
                         strokeWidth={14}
                       />
-                      {/* Visible Edge */}
                       <path
                         d={pathData}
                         fill="none"
@@ -965,7 +995,7 @@ export const DiagramStudio: React.FC = () => {
                   );
                 })}
 
-                {/* Connecting Line Preview while dragging from anchor */}
+                {/* Connecting Line Preview */}
                 {isConnecting && connectingSource.current && connectionPointer && (() => {
                   const srcNode = doc.nodes.find(n => n.id === connectingSource.current?.nodeId);
                   if (!srcNode) return null;
@@ -1000,7 +1030,7 @@ export const DiagramStudio: React.FC = () => {
                       isSelected ? 'ring-2 ring-cyan-500 shadow-2xl z-20' : 'shadow-md hover:shadow-lg z-10'
                     }`}
                   >
-                    {/* Connection Anchor Handles (Top, Bottom, Left, Right) */}
+                    {/* Anchor Connection Points */}
                     {(['top', 'bottom', 'left', 'right'] as AnchorPosition[]).map(anchor => {
                       const posClass =
                         anchor === 'top' ? '-top-2 left-1/2 -translate-x-1/2' :
@@ -1018,137 +1048,49 @@ export const DiagramStudio: React.FC = () => {
                       );
                     })}
 
-                    {/* ER Table Shape */}
-                    {n.type === 'er-table' ? (
-                      <div
-                        style={{
-                          borderRadius: `${n.cornerRadius}px`,
-                          borderColor: n.strokeColor,
-                          borderWidth: `${n.strokeWidth}px`,
-                        }}
-                        className="bg-white border flex flex-col overflow-hidden"
-                      >
-                        <div
-                          style={{ backgroundColor: n.fillColor, color: n.textColor }}
-                          className="px-3 py-2 flex items-center justify-between"
-                        >
-                          <span className="font-black text-xs uppercase tracking-wider truncate">{n.text}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateDoc(prev => ({
-                                ...prev,
-                                nodes: prev.nodes.map(node => {
-                                  if (node.id !== n.id) return node;
-                                  return {
-                                    ...node,
-                                    height: node.height + 26,
-                                    fields: [...(node.fields || []), { id: `f-${Date.now()}`, name: 'new_col', type: 'varchar(100)' }]
-                                  };
-                                })
-                              }));
-                            }}
-                            className="p-1 hover:bg-black/20 rounded text-white"
-                            title="Add column"
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                        <div className="divide-y divide-slate-100 bg-white">
-                          {n.fields?.map((f, fIdx) => (
-                            <div key={f.id} className="px-3 py-1.5 flex items-center justify-between text-[11px] group/col hover:bg-slate-50">
-                              <span className="font-semibold text-slate-700 truncate">{f.name}</span>
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-mono text-[10px] text-slate-400">{f.type}</span>
-                                {f.isPk && <span className="px-1 py-0.2 bg-red-100 text-red-600 font-black text-[9px] rounded">PK</span>}
-                                {f.isFk && <span className="px-1 py-0.2 bg-indigo-100 text-indigo-600 font-black text-[9px] rounded">FK</span>}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    updateDoc(prev => ({
-                                      ...prev,
-                                      nodes: prev.nodes.map(node => {
-                                        if (node.id !== n.id || !node.fields) return node;
-                                        return {
-                                          ...node,
-                                          height: Math.max(90, node.height - 26),
-                                          fields: node.fields.filter((_, idx) => idx !== fIdx)
-                                        };
-                                      })
-                                    }));
-                                  }}
-                                  className="opacity-0 group-col-hover:opacity-100 text-slate-300 hover:text-red-500"
-                                >
-                                  <Trash2 size={11} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : n.type === 'uml-class' ? (
-                      /* UML Class Box */
-                      <div
-                        style={{
-                          borderRadius: `${n.cornerRadius}px`,
-                          borderColor: n.strokeColor,
-                          borderWidth: `${n.strokeWidth}px`,
-                        }}
-                        className="bg-white border flex flex-col overflow-hidden"
-                      >
-                        <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 text-center font-black text-xs text-slate-800">
-                          {n.text}
-                        </div>
-                        <div className="p-2 space-y-1 text-[11px] font-mono">
-                          {n.umlMembers?.map(m => (
-                            <div key={m.id} className="text-slate-600">
-                              <span className="font-bold text-slate-400 mr-1">{m.visibility}</span>
-                              <span>{m.name}</span>
-                              {m.type && <span className="text-slate-400">: {m.type}</span>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      /* Standard Shapes (Rectangle, Rounded, Circle, Diamond, Cylinder, Sticky) */
-                      <div
-                        onDoubleClick={() => setEditingNodeId(n.id)}
-                        style={{
-                          backgroundColor: n.fillColor,
-                          borderColor: n.strokeColor,
-                          borderWidth: `${n.strokeWidth}px`,
-                          borderRadius: n.type === 'circle' ? '9999px' : `${n.cornerRadius}px`,
-                          color: n.textColor,
-                          height: n.height,
-                        }}
-                        className={`flex items-center justify-center p-3 border text-center font-bold text-xs ${
-                          n.textAlign === 'left' ? 'text-left justify-start' : n.textAlign === 'right' ? 'text-right justify-end' : 'text-center justify-center'
-                        }`}
-                      >
-                        {editingNodeId === n.id ? (
-                          <textarea
-                            autoFocus
-                            value={n.text}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              updateDoc(prev => ({
-                                ...prev,
-                                nodes: prev.nodes.map(node => node.id === n.id ? { ...node, text: val } : node)
-                              }), false);
-                            }}
-                            onBlur={() => {
-                              setEditingNodeId(null);
-                              commitToHistory(doc);
-                            }}
-                            className="w-full h-full bg-white/80 p-1 rounded font-bold text-xs text-slate-800 outline-none resize-none"
-                          />
-                        ) : (
-                          <span className="whitespace-pre-line leading-relaxed">{n.text}</span>
-                        )}
-                      </div>
-                    )}
+                    {/* Clean Shape Renderer */}
+                    <ShapeRenderer
+                      node={n}
+                      isEditing={editingNodeId === n.id}
+                      onTextChange={(val) => {
+                        updateDoc(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(item => item.id === n.id ? { ...item, text: val } : item)
+                        }), false);
+                      }}
+                      onBlur={() => {
+                        setEditingNodeId(null);
+                        commitToHistory(doc);
+                      }}
+                      onAddCol={() => {
+                        updateDoc(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(item => {
+                            if (item.id !== n.id) return item;
+                            return {
+                              ...item,
+                              height: item.height + 26,
+                              fields: [...(item.fields || []), { id: `f-${Date.now()}`, name: 'new_col', type: 'varchar(100)' }]
+                            };
+                          })
+                        }));
+                      }}
+                      onRemoveCol={(idx) => {
+                        updateDoc(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(item => {
+                            if (item.id !== n.id || !item.fields) return item;
+                            return {
+                              ...item,
+                              height: Math.max(90, item.height - 26),
+                              fields: item.fields.filter((_, i) => i !== idx)
+                            };
+                          })
+                        }));
+                      }}
+                    />
 
-                    {/* Resize Handles (Corner handles when selected) */}
+                    {/* Resize Handles */}
                     {isSelected && (
                       <>
                         <div
@@ -1188,7 +1130,6 @@ export const DiagramStudio: React.FC = () => {
                 <Sliders size={14} className="text-slate-400" />
               </div>
 
-              {/* Active Node Inspector */}
               {activeNode ? (
                 <div className="space-y-4">
                   <div>
@@ -1207,68 +1148,132 @@ export const DiagramStudio: React.FC = () => {
                     />
                   </div>
 
+                  {activeNode.type === 'card' && (
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Card Header Title</label>
+                      <input
+                        value={activeNode.headerText || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, headerText: val } : n)
+                          }));
+                        }}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* Typography Controls */}
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1.5">Typography</label>
+                    <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200 mb-2">
+                      <button
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontBold: !n.fontBold } : n)
+                          }));
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.fontBold ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Bold"
+                      >
+                        <Bold size={14} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontItalic: !n.fontItalic } : n)
+                          }));
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.fontItalic ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Italic"
+                      >
+                        <Italic size={14} />
+                      </button>
+                      <div className="h-4 w-px bg-slate-200 mx-1" />
+                      <button
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'left' } : n)
+                          }));
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'left' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Align Left"
+                      >
+                        <AlignLeft size={14} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'center' } : n)
+                          }));
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'center' || !activeNode.textAlign ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Align Center"
+                      >
+                        <AlignCenter size={14} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, textAlign: 'right' } : n)
+                          }));
+                        }}
+                        className={`p-1.5 rounded-lg text-xs font-bold ${activeNode.textAlign === 'right' ? 'bg-white shadow text-cyan-600' : 'text-slate-500'}`}
+                        title="Align Right"
+                      >
+                        <AlignRight size={14} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-slate-400">Size:</span>
+                      <input
+                        type="range"
+                        min="10"
+                        max="24"
+                        value={activeNode.fontSize}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fontSize: val } : n)
+                          }));
+                        }}
+                        className="flex-1 accent-cyan-600"
+                      />
+                      <span className="text-[10px] font-bold text-slate-600">{activeNode.fontSize}px</span>
+                    </div>
+                  </div>
+
                   {/* Preset Colors */}
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1.5 flex items-center gap-1">
                       <Palette size={12} />
-                      Background / Header Theme
+                      Theme Color
                     </label>
-                    <div className="grid grid-cols-6 gap-2">
+                    <div className="grid grid-cols-7 gap-1.5">
                       {COLOR_PRESETS.map(c => (
                         <button
                           key={c}
                           onClick={() => {
                             updateDoc(prev => ({
                               ...prev,
-                              nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fillColor: c } : n)
+                              nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fillColor: c, strokeColor: c === '#ffffff' ? '#cbd5e1' : c } : n)
                             }));
                           }}
                           style={{ backgroundColor: c }}
-                          className="h-7 rounded-lg border-2 border-slate-200 shadow-sm flex items-center justify-center transition-transform hover:scale-110"
+                          className="h-6 rounded-md border border-slate-200 shadow-sm flex items-center justify-center transition-transform hover:scale-110"
                         >
-                          {activeNode.fillColor === c && <Check size={12} className={c === '#ffffff' || c === '#f8fafc' ? 'text-slate-800' : 'text-white'} />}
+                          {activeNode.fillColor === c && <Check size={11} className={c === '#ffffff' || c === '#f8fafc' ? 'text-slate-800' : 'text-white'} />}
                         </button>
                       ))}
-                    </div>
-                  </div>
-
-                  {/* Corner Radius & Border Weight */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Corners</label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="30"
-                        value={activeNode.cornerRadius}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, cornerRadius: val } : n)
-                          }));
-                        }}
-                        className="w-full accent-cyan-600"
-                      />
-                      <span className="text-[10px] font-bold text-slate-500">{activeNode.cornerRadius}px</span>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Thickness</label>
-                      <input
-                        type="range"
-                        min="1"
-                        max="8"
-                        value={activeNode.strokeWidth}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          updateDoc(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, strokeWidth: val } : n)
-                          }));
-                        }}
-                        className="w-full accent-cyan-600"
-                      />
-                      <span className="text-[10px] font-bold text-slate-500">{activeNode.strokeWidth}px</span>
                     </div>
                   </div>
 
@@ -1307,6 +1312,28 @@ export const DiagramStudio: React.FC = () => {
                   </div>
 
                   <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Routing Mode</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['orthogonal', 'curved', 'straight'] as RoutingType[]).map(rm => (
+                        <button
+                          key={rm}
+                          onClick={() => {
+                            updateDoc(prev => ({
+                              ...prev,
+                              edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, routing: rm } : ed)
+                            }));
+                          }}
+                          className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
+                            activeEdge.routing === rm ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {rm}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Line Pattern</label>
                     <div className="grid grid-cols-3 gap-2">
                       {(['solid', 'dashed', 'dotted'] as ArrowStyle[]).map(st => (
@@ -1325,38 +1352,6 @@ export const DiagramStudio: React.FC = () => {
                           {st}
                         </button>
                       ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Arrow Head Type</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, arrowEnd: 'arrow' } : ed)
-                          }));
-                        }}
-                        className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                          activeEdge.arrowEnd === 'arrow' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        Arrow (→)
-                      </button>
-                      <button
-                        onClick={() => {
-                          updateDoc(prev => ({
-                            ...prev,
-                            edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, arrowEnd: 'crowfoot' } : ed)
-                          }));
-                        }}
-                        className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                          activeEdge.arrowEnd === 'crowfoot' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        Crow's Foot (ER)
-                      </button>
                     </div>
                   </div>
 
@@ -1390,7 +1385,7 @@ export const DiagramStudio: React.FC = () => {
           </div>
         </div>
       ) : (
-        /* Mermaid.js Code Tab (Fully Synchronized Import / Export) */
+        /* Mermaid.js Code Tab */
         <div className="flex-1 flex overflow-hidden">
           <div className="w-1/2 p-6 flex flex-col border-r border-slate-200 bg-slate-900 text-slate-100">
             <div className="flex items-center justify-between mb-3">
@@ -1430,7 +1425,6 @@ export const DiagramStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Import into Canvas Button */}
             <div className="flex items-center gap-3 mt-4">
               <button
                 onClick={handleImportMermaidToCanvas}
@@ -1462,7 +1456,6 @@ export const DiagramStudio: React.FC = () => {
               </button>
             </div>
 
-            {/* Filter Tabs & Search */}
             <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-4">
               <div className="flex items-center gap-1">
                 {['All', 'Business & Strategy', 'Engineering & Database', 'Flowchart & Process', 'Project & Planning'].map(cat => (
@@ -1488,7 +1481,6 @@ export const DiagramStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Grid of Templates */}
             <div className="flex-1 p-6 overflow-y-auto custom-scrollbar grid grid-cols-2 gap-4">
               {filteredTemplates.map(tmpl => (
                 <div

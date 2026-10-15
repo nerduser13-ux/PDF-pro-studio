@@ -13,7 +13,12 @@ export type ShapeType =
   | 'er-table'
   | 'uml-class'
   | 'swimlane'
-  | 'step-process';
+  | 'step-process'
+  | 'card'
+  | 'callout'
+  | 'document'
+  | 'trapezoid'
+  | 'stadium';
 
 export type ArrowStyle = 'solid' | 'dashed' | 'dotted';
 export type ArrowHead = 'arrow' | 'crowfoot' | 'circle' | 'diamond' | 'none';
@@ -46,6 +51,10 @@ export interface DiagramNode {
   width: number;
   height: number;
   text: string;
+  // Typography & Content
+  headerText?: string;
+  badgeText?: string;
+  iconName?: string; // lucide icon identifier e.g. "building", "dollar", "users", "cpu", "leaf", "scale", etc.
   fillColor: string;
   strokeColor: string;
   strokeWidth: number;
@@ -54,13 +63,17 @@ export interface DiagramNode {
   fontSize: number;
   fontBold?: boolean;
   fontItalic?: boolean;
+  fontUnderline?: boolean;
+  fontFamily?: string;
   textAlign?: 'left' | 'center' | 'right';
+  verticalAlign?: 'top' | 'middle' | 'bottom';
   cornerRadius: number;
   opacity?: number;
   rotation?: number;
   locked?: boolean;
   zIndex?: number;
   groupId?: string;
+  shadow?: boolean;
   // ER Table specific:
   fields?: ERColumn[];
   // UML Class specific:

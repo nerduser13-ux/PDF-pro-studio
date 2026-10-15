@@ -1,5 +1,59 @@
-import { DiagramDocument } from './types';
+import { DiagramDocument, DiagramNode } from './types';
 import { getNodeAnchorPoint, computeEdgePath } from './geometry';
+
+/**
+ * Returns SVG path data or element for different shape types
+ */
+function renderShapeSvg(n: DiagramNode, x: number, y: number): string {
+  const w = n.width;
+  const h = n.height;
+
+  switch (n.type) {
+    case 'circle': {
+      const r = w / 2;
+      return `<circle cx="${x + r}" cy="${y + r}" r="${r}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'ellipse': {
+      const rx = w / 2;
+      const ry = h / 2;
+      return `<ellipse cx="${x + rx}" cy="${y + ry}" rx="${rx}" ry="${ry}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'diamond': {
+      const mx = x + w / 2;
+      const my = y + h / 2;
+      return `<polygon points="${mx},${y} ${x + w},${my} ${mx},${y + h} ${x},${my}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'parallelogram': {
+      const offset = Math.min(24, w * 0.2);
+      return `<polygon points="${x + offset},${y} ${x + w},${y} ${x + w - offset},${y + h} ${x},${y + h}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'trapezoid': {
+      const offset = Math.min(20, w * 0.15);
+      return `<polygon points="${x + offset},${y} ${x + w - offset},${y} ${x + w},${y + h} ${x},${y + h}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'stadium': {
+      const r = h / 2;
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'cylinder': {
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="14" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+    case 'card': {
+      // Modern information card with colored pill header
+      const headerH = 34;
+      return `
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${n.cornerRadius || 16}" fill="#ffffff" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
+        <rect x="${x}" y="${y}" width="${w}" height="${headerH}" rx="${n.cornerRadius || 16}" fill="${n.fillColor}" />
+        <rect x="${x}" y="${y + headerH - 8}" width="${w}" height="8" fill="${n.fillColor}" />
+      `;
+    }
+    case 'rounded':
+    case 'rectangle':
+    default: {
+      return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${n.cornerRadius || 0}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
+    }
+  }
+}
 
 /**
  * Generates an SVG string representation of a DiagramDocument
@@ -33,6 +87,9 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
       <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
         <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" stroke-width="1.5" fill="none" />
       </marker>
+      <marker id="circle" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <circle cx="5" cy="5" r="4" fill="#0ea5e9" />
+      </marker>
       <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
         <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.1" />
       </filter>
@@ -60,11 +117,12 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
     const { pathData, labelPoint } = computeEdgePath(
       { x: startX, y: startY },
       { x: endX, y: endY },
-      e.routing || 'orthogonal'
+      e.routing || 'orthogonal',
+      e.waypoints
     );
 
     const dash = e.style === 'dashed' ? 'stroke-dasharray="6,4"' : e.style === 'dotted' ? 'stroke-dasharray="2,4"' : '';
-    const marker = e.arrowEnd === 'crowfoot' ? 'marker-end="url(#crowfoot)"' : 'marker-end="url(#arrow)"';
+    const marker = e.arrowEnd === 'crowfoot' ? 'marker-end="url(#crowfoot)"' : e.arrowEnd === 'circle' ? 'marker-end="url(#circle)"' : 'marker-end="url(#arrow)"';
 
     svg += `<path d="${pathData}" fill="none" stroke="${e.strokeColor}" stroke-width="${e.strokeWidth}" ${dash} ${marker} />`;
 
@@ -81,7 +139,7 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
     const x = n.x - offsetX;
     const y = n.y - offsetY;
 
-    svg += `<g filter="url(#shadow)">`;
+    svg += `<g ${n.shadow ? 'filter="url(#shadow)"' : ''}>`;
 
     if (n.type === 'er-table') {
       const headerH = 38;
@@ -98,24 +156,31 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
           <text x="${x + n.width - 14}" y="${fy}" font-family="Inter, sans-serif" font-size="10" font-weight="bold" fill="${f.isPk ? '#ef4444' : f.isFk ? '#6366f1' : '#94a3b8'}" text-anchor="end">${f.isPk ? 'PK ' : f.isFk ? 'FK ' : ''}${f.type}</text>
         `;
       });
-    } else if (n.type === 'circle') {
-      const r = n.width / 2;
+    } else if (n.type === 'card') {
+      // Modern Information Card
+      svg += renderShapeSvg(n, x, y);
+      const headerH = 34;
+      // Header Title & Badge
+      const title = n.headerText || 'CARD';
       svg += `
-        <circle cx="${x + r}" cy="${y + r}" r="${r}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-        <text x="${x + r}" y="${y + r + 4}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
+        <text x="${x + 16}" y="${y + 22}" font-family="Inter, sans-serif" font-size="12" font-weight="900" fill="#ffffff" letter-spacing="0.5">${title}</text>
       `;
-    } else if (n.type === 'diamond') {
-      const mx = x + n.width / 2;
-      const my = y + n.height / 2;
-      svg += `
-        <polygon points="${mx},${y} ${x + n.width},${my} ${mx},${y + n.height} ${x},${my}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-        <text x="${mx}" y="${my + 4}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
-      `;
+      if (n.badgeText) {
+        svg += `
+          <circle cx="${x + n.width - 18}" cy="${y + 17}" r="10" fill="#ffffff" />
+          <text x="${x + n.width - 18}" y="${y + 21}" font-family="Inter, sans-serif" font-size="10" font-weight="900" fill="${n.fillColor}" text-anchor="middle">${n.badgeText}</text>
+        `;
+      }
+      // Body Text
+      const lines = n.text.split('\n');
+      lines.forEach((l, lIdx) => {
+        svg += `
+          <text x="${x + 16}" y="${y + headerH + 20 + lIdx * 16}" font-family="Inter, sans-serif" font-size="11" font-weight="500" fill="${n.textColor}">${l}</text>
+        `;
+      });
     } else {
-      svg += `
-        <rect x="${x}" y="${y}" width="${n.width}" height="${n.height}" rx="${n.cornerRadius}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-      `;
-      // Handle multi-line text
+      svg += renderShapeSvg(n, x, y);
+      // Multi-line text for general shapes
       const lines = n.text.split('\n');
       const startY = y + (n.height - lines.length * 16) / 2 + 12;
       lines.forEach((l, lIdx) => {
