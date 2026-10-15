@@ -17,7 +17,8 @@ import {
   Undo2,
   Redo2,
   Grid,
-  ShieldAlert
+  ShieldAlert,
+  Database
 } from 'lucide-react';
 
 interface EditorControlsProps extends ToolProps {
@@ -106,6 +107,14 @@ export const PDFEditorControls: React.FC<EditorControlsProps> = ({
           >
             <RefreshCcw size={18} />
             <span className="text-[8px] font-black uppercase text-center leading-none">Reset</span>
+          </button>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('editor:open-diagram'))}
+            className="col-span-4 flex items-center justify-center gap-2 p-3 mt-1 rounded-xl border-2 border-indigo-100 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 font-bold text-xs uppercase tracking-wider transition-all shadow-sm"
+            title="Create ER Diagrams, DB Relationships & Mermaid Models"
+          >
+            <Database size={16} className="text-indigo-600" />
+            <span>Create ER / DB Diagram</span>
           </button>
         </div>
       </div>
