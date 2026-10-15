@@ -131,7 +131,7 @@ export function reactFlowToDocument(
   });
 
   const edges: DiagramEdge[] = rfEdges.map(e => {
-    const data = e.data || {};
+    const data = (e.data || {}) as Record<string, any>;
     const fromAnchor = (e.sourceHandle?.replace('-target', '').replace('-left', '').replace('-right', '') || data.fromAnchor || 'bottom') as any;
     const toAnchor = (e.targetHandle?.replace('-target', '').replace('-left', '').replace('-right', '') || data.toAnchor || 'top') as any;
 
@@ -148,6 +148,7 @@ export function reactFlowToDocument(
       strokeWidth: data.strokeWidth || 2,
       arrowEnd: data.arrowEnd || 'arrow',
       cardinality: data.cardinality,
+      waypoints: data.waypoints,
     };
   });
 

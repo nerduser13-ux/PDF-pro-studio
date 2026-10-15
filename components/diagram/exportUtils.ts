@@ -125,8 +125,12 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
 
     const dash = e.style === 'dashed' ? 'stroke-dasharray="6,4"' : e.style === 'dotted' ? 'stroke-dasharray="2,4"' : '';
     let markerAttr = 'marker-end="url(#arrow)"';
-    if (e.cardinality === '1:N' || e.cardinality === 'N:M') {
-      markerAttr = 'marker-end="url(#crowfoot)" marker-start="url(#one)"';
+    if (e.cardinality === '1:N') {
+      markerAttr = 'marker-start="url(#one)" marker-end="url(#crowfoot)"';
+    } else if (e.cardinality === 'N:M') {
+      markerAttr = 'marker-start="url(#crowfoot)" marker-end="url(#crowfoot)"';
+    } else if (e.cardinality === '1:1') {
+      markerAttr = 'marker-start="url(#one)" marker-end="url(#one)"';
     } else if (e.arrowEnd === 'crowfoot') {
       markerAttr = 'marker-end="url(#crowfoot)"';
     } else if (e.arrowEnd === 'circle') {
