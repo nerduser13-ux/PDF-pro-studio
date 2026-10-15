@@ -102,7 +102,54 @@ describe('Diagram Studio Engine & React Flow Adapter Tests', () => {
     }
   });
 
-  it('Scenario D: Mermaid ER Diagram Import & Columns', () => {
+  it('Scenario D: Mermaid Dagre Layout and classDef / style color matching', () => {
+    const testCode = `flowchart TD
+    P["POLITICAL<br/>• Brexit"]
+    E["ECONOMIC<br/>• Inflation"]
+    S["SOCIAL<br/>• Streaming"]
+    A["BLACK MONEY RECORDS LIMITED"]
+    T["TECHNOLOGICAL<br/>• Digital"]
+    EN["ENVIRONMENTAL<br/>• Sustainability"]
+    L["LEGAL<br/>• Copyright"]
+
+    P --> A
+    E --> A
+    S --> A
+    A --> T
+    A --> EN
+    A --> L
+
+    classDef central fill:#142D4E,color:#ffffff,stroke:#07182F,stroke-width:3px
+    classDef political fill:#FCE8EC,color:#881734,stroke:#D84B69,stroke-width:2px
+
+    class A central
+    class P political`;
+
+    const res = parseMermaidToDocument(testCode);
+    expect(res.success).toBe(true);
+    expect(res.document).toBeDefined();
+
+    const nodeA = res.document?.nodes.find(n => n.id === 'A');
+    expect(nodeA).toBeDefined();
+    expect(nodeA?.fillColor).toBe('#142D4E');
+    expect(nodeA?.textColor).toBe('#ffffff');
+    expect(nodeA?.strokeColor).toBe('#07182F');
+
+    const nodeP = res.document?.nodes.find(n => n.id === 'P');
+    expect(nodeP).toBeDefined();
+    expect(nodeP?.fillColor).toBe('#FCE8EC');
+    expect(nodeP?.textColor).toBe('#881734');
+    expect(nodeP?.strokeColor).toBe('#D84B69');
+
+    // Verify Dagre hierarchical layout:
+    // P should be on top (lower Y than A)
+    // A should be in the middle (between P and T)
+    const nodeT = res.document?.nodes.find(n => n.id === 'T');
+    expect(nodeP!.y).toBeLessThan(nodeA!.y);
+    expect(nodeA!.y).toBeLessThan(nodeT!.y);
+  });
+
+  it('Scenario E: Mermaid ER Diagram Import & Columns', () => {
     const mermaidEr = `erDiagram
     USERS ||--o{ ORDERS : places
     USERS {
@@ -125,7 +172,7 @@ describe('Diagram Studio Engine & React Flow Adapter Tests', () => {
     expect(userTable?.fields?.[0].isPk).toBe(true);
   });
 
-  it('Scenario E: Templates Instantiation (SWOT & PESTEL Infographics)', () => {
+  it('Scenario F: Templates Instantiation (SWOT & PESTEL Infographics)', () => {
     const pestelTemplate = DIAGRAM_TEMPLATES.find(t => t.id === 'pestel-infographic');
     expect(pestelTemplate).toBeDefined();
 
@@ -146,7 +193,7 @@ describe('Diagram Studio Engine & React Flow Adapter Tests', () => {
     expect(svg).toContain('ECONOMICAL');
   });
 
-  it('Scenario F: Label sanitization function', () => {
+  it('Scenario G: Label sanitization function', () => {
     expect(cleanMermaidLabel('Test<br/>Line 2')).toBe('Test\nLine 2');
     expect(cleanMermaidLabel('"Quoted string"')).toBe('Quoted string');
     expect(cleanMermaidLabel('&amp; &lt; &gt;')).toBe('& < >');

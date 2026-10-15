@@ -1,3 +1,5 @@
+import * as dagre from 'dagre-d3-es/src/dagre/index.js';
+import * as graphlib from 'dagre-d3-es/src/graphlib/index.js';
 import { DiagramDocument, DiagramNode, DiagramEdge, ShapeType, ERColumn, ArrowStyle, ArrowHead, RoutingType } from './types';
 
 export interface MermaidParseResult {
@@ -81,9 +83,19 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
   const edges: DiagramEdge[] = [];
   const unsupported: string[] = [];
 
-  // Determine direction (TD, TB, LR, RL)
+  // Determine direction (TD, TB, LR, RL, BT)
   const header = lines[0];
-  const isHorizontal = header.toUpperCase().includes('LR') || header.toUpperCase().includes('RL');
+  let rankdir = 'TB';
+  if (header.toUpperCase().includes('LR')) rankdir = 'LR';
+  else if (header.toUpperCase().includes('RL')) rankdir = 'RL';
+  else if (header.toUpperCase().includes('BT')) rankdir = 'BT';
+
+  const isHorizontal = rankdir === 'LR' || rankdir === 'RL';
+
+  // Store classDef and style rules
+  const classDefs = new Map<string, Record<string, string>>();
+  const nodeClasses = new Map<string, string>();
+  const nodeInlineStyles = new Map<string, Record<string, string>>();
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
@@ -92,18 +104,65 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
       continue;
     }
 
-    // Match edge patterns:
+    // 1. classDef className key:val,key:val...
+    const classDefMatch = line.match(/^classDef\s+([a-zA-Z0-9_\-]+)\s+(.+)$/);
+    if (classDefMatch) {
+      const cName = classDefMatch[1];
+      const props: Record<string, string> = {};
+      classDefMatch[2].split(',').forEach(kv => {
+        const [k, v] = kv.split(':').map(s => s?.trim());
+        if (k && v) props[k.toLowerCase()] = v;
+      });
+      classDefs.set(cName, props);
+      continue;
+    }
+
+    // 2. class NodeA,NodeB className
+    const classAssignMatch = line.match(/^class\s+([a-zA-Z0-9_\-,\s]+)\s+([a-zA-Z0-9_\-]+)$/);
+    if (classAssignMatch) {
+      const nodeIds = classAssignMatch[1].split(',').map(s => s.trim());
+      const cName = classAssignMatch[2];
+      nodeIds.forEach(id => {
+        if (id) nodeClasses.set(id, cName);
+      });
+      continue;
+    }
+
+    // 3. style NodeA fill:#fff,stroke:#000
+    const styleMatch = line.match(/^style\s+([a-zA-Z0-9_\-]+)\s+(.+)$/);
+    if (styleMatch) {
+      const nId = styleMatch[1];
+      const props: Record<string, string> = {};
+      styleMatch[2].split(',').forEach(kv => {
+        const [k, v] = kv.split(':').map(s => s?.trim());
+        if (k && v) props[k.toLowerCase()] = v;
+      });
+      nodeInlineStyles.set(nId, props);
+      continue;
+    }
+
+    // 4. Edge patterns:
     // e.g. A["Text"] --> B{"Text"}, B -->|"Yes"| C["Text"], B -.->|"No"| D["Text"]
-    const edgeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)\s*(-->|--\s*".*?"\s*-->|--\s*.*?\s*-->|-\.->|==>|--)(?:\|"?(.*?)"?\|)?\s*([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)/);
+    // also supports node with class tag: A:::className --> B
+    const edgeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?(?:::([a-zA-Z0-9_\-]+))?)\s*(-->|--\s*".*?"\s*-->|--\s*.*?\s*-->|-\.->|==>|--)(?:\|"?(.*?)"?\|)?\s*([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?(?:::([a-zA-Z0-9_\-]+))?)/);
 
     if (edgeMatch) {
       const rawSource = edgeMatch[1];
-      const rawConnector = edgeMatch[2];
-      const pipeLabel = edgeMatch[3];
-      const rawTarget = edgeMatch[4];
+      const sourceClass = edgeMatch[2];
+      const rawConnector = edgeMatch[3];
+      const pipeLabel = edgeMatch[4];
+      const rawTarget = edgeMatch[5];
+      const targetClass = edgeMatch[6];
 
-      const sourceNode = parseOrCreateNode(rawSource, nodesMap);
-      const targetNode = parseOrCreateNode(rawTarget, nodesMap);
+      // Strip :::class if present
+      const cleanSource = rawSource.replace(/:::[a-zA-Z0-9_\-]+$/, '');
+      const cleanTarget = rawTarget.replace(/:::[a-zA-Z0-9_\-]+$/, '');
+
+      const sourceNode = parseOrCreateNode(cleanSource, nodesMap);
+      const targetNode = parseOrCreateNode(cleanTarget, nodesMap);
+
+      if (sourceClass) nodeClasses.set(sourceNode.id, sourceClass);
+      if (targetClass) nodeClasses.set(targetNode.id, targetClass);
 
       // Parse edge label and style
       let label: string | undefined = pipeLabel ? cleanMermaidLabel(pipeLabel) : undefined;
@@ -137,17 +196,40 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
         arrowEnd: 'arrow',
       });
     } else {
-      // Standalone node definition: NodeId[Label]
-      const nodeMatch = line.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)$/);
+      // Standalone node definition: NodeId[Label] or NodeId:::className
+      let standalone = line;
+      let inlineClass: string | undefined = undefined;
+      const classSuffix = standalone.match(/(.+):::([a-zA-Z0-9_\-]+)$/);
+      if (classSuffix) {
+        standalone = classSuffix[1];
+        inlineClass = classSuffix[2];
+      }
+
+      const nodeMatch = standalone.match(/^([a-zA-Z0-9_\-]+(?:\[.*?\]|\(.*?\)|<.*?>|\{.*?\}|\([\[\(].*?[\)\]]\)|\[\/.*?\/\]|\[\\.*?\\\])?)$/);
       if (nodeMatch) {
-        parseOrCreateNode(nodeMatch[1], nodesMap);
+        const node = parseOrCreateNode(nodeMatch[1], nodesMap);
+        if (inlineClass) {
+          nodeClasses.set(node.id, inlineClass);
+        }
       }
     }
   }
 
-  // Automatic grid layout
+  // Apply parsed classes & styles to nodes
+  nodesMap.forEach(node => {
+    const cName = nodeClasses.get(node.id);
+    if (cName && classDefs.has(cName)) {
+      const def = classDefs.get(cName)!;
+      applyStylesToNode(node, def);
+    }
+    const inline = nodeInlineStyles.get(node.id);
+    if (inline) {
+      applyStylesToNode(node, inline);
+    }
+  });
+
   const nodes = Array.from(nodesMap.values());
-  applyAutoLayout(nodes, edges, isHorizontal);
+  applyDagreLayout(nodes, edges, rankdir);
 
   return {
     success: true,
@@ -165,6 +247,28 @@ function parseFlowchart(lines: string[]): MermaidParseResult {
 }
 
 /**
+ * Applies CSS properties from Mermaid classDef/style to DiagramNode
+ */
+function applyStylesToNode(node: DiagramNode, props: Record<string, string>) {
+  if (props.fill) {
+    node.fillColor = props.fill;
+  }
+  if (props.stroke) {
+    node.strokeColor = props.stroke;
+  }
+  if (props.color) {
+    node.textColor = props.color;
+  }
+  if (props['stroke-width']) {
+    const sw = parseInt(props['stroke-width']);
+    if (!isNaN(sw)) node.strokeWidth = sw;
+  }
+  if (props['stroke-dasharray']) {
+    node.strokeDash = 'dashed';
+  }
+}
+
+/**
  * Extracts node ID and shape styling from Mermaid node syntax
  */
 function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): DiagramNode {
@@ -172,8 +276,9 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
   let text = raw;
   let type: ShapeType = 'rectangle';
   let cornerRadius = 8;
-  let fillColor = '#ffffff';
+  let fillColor = '#eff6ff';
   let strokeColor = '#3b82f6';
+  let textColor = '#1e293b';
 
   // Check brackets:
   // [("Text")] -> cylinder
@@ -218,12 +323,12 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
     text = raw.substring(raw.indexOf('(') + 1, raw.lastIndexOf(')')).trim();
     type = 'rounded';
     cornerRadius = 16;
-    fillColor = '#f8fafc';
+    fillColor = '#eff6ff';
   } else if (raw.includes('[') && raw.includes(']')) {
     id = raw.substring(0, raw.indexOf('[')).trim();
     text = raw.substring(raw.indexOf('[') + 1, raw.lastIndexOf(']')).trim();
     type = 'rectangle';
-    fillColor = '#ffffff';
+    fillColor = '#eff6ff';
   }
 
   // Clean HTML line breaks and quotes
@@ -244,8 +349,8 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
   // Estimate node size based on text lines
   const textLines = text.split('\n');
   const maxLineLen = Math.max(...textLines.map(l => l.length));
-  const estimatedWidth = Math.max(type === 'diamond' ? 150 : 160, maxLineLen * 9 + 40);
-  const estimatedHeight = Math.max(type === 'diamond' ? 110 : 80, textLines.length * 22 + 40);
+  const estimatedWidth = Math.max(type === 'diamond' ? 150 : 180, Math.min(380, maxLineLen * 9 + 40));
+  const estimatedHeight = Math.max(type === 'diamond' ? 110 : 80, textLines.length * 24 + 36);
 
   const newNode: DiagramNode = {
     id,
@@ -258,7 +363,7 @@ function parseOrCreateNode(raw: string, nodesMap: Map<string, DiagramNode>): Dia
     fillColor,
     strokeColor,
     strokeWidth: 2,
-    textColor: '#1e293b',
+    textColor,
     fontSize: 12,
     fontBold: true,
     cornerRadius,
@@ -373,29 +478,33 @@ function parseErDiagram(lines: string[]): MermaidParseResult {
         return t;
       };
 
-      const source = getOrCreateTable(fromName);
-      const target = getOrCreateTable(toName);
+      const sourceTable = getOrCreateTable(fromName);
+      const targetTable = getOrCreateTable(toName);
 
-      const isDashed = relLine.includes('.');
-      const isCrowfoot = rightCard.includes('{') || leftCard.includes('}');
+      let card: '1:1' | '1:N' | 'N:M' = '1:N';
+      if ((leftCard.includes('}') || leftCard.includes('o{')) && (rightCard.includes('{') || rightCard.includes('o{'))) {
+        card = 'N:M';
+      } else if (leftCard.includes('||') && rightCard.includes('||')) {
+        card = '1:1';
+      }
 
       edges.push({
-        id: `er-edge-${edges.length + 1}`,
-        from: source.id,
-        to: target.id,
+        id: `rel-${edges.length + 1}`,
+        from: sourceTable.id,
+        to: targetTable.id,
         label,
-        style: isDashed ? 'dashed' : 'solid',
+        cardinality: card,
+        style: relLine.includes('..') ? 'dashed' : 'solid',
         routing: 'orthogonal',
-        strokeColor: source.fillColor,
+        strokeColor: '#4f46e5',
         strokeWidth: 2,
-        arrowEnd: isCrowfoot ? 'crowfoot' : 'arrow',
-        cardinality: isCrowfoot ? '1:N' : '1:1',
+        arrowEnd: card === '1:N' || card === 'N:M' ? 'crowfoot' : 'arrow',
       });
     }
   }
 
   const nodes = Array.from(tablesMap.values());
-  applyAutoLayout(nodes, edges, true);
+  applyDagreLayout(nodes, edges, 'TB');
 
   return {
     success: true,
@@ -415,104 +524,125 @@ function parseErDiagram(lines: string[]): MermaidParseResult {
  * Parser for Mermaid Class Diagrams
  */
 function parseClassDiagram(lines: string[]): MermaidParseResult {
-  const classMap = new Map<string, DiagramNode>();
+  const classesMap = new Map<string, DiagramNode>();
   const edges: DiagramEdge[] = [];
-
-  let currentClass: DiagramNode | null = null;
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
 
-    if (currentClass) {
-      if (line === '}') {
-        currentClass = null;
-        continue;
+    // Class definition: class ClassName
+    const classDefMatch = line.match(/^class\s+([a-zA-Z0-9_\-]+)\s*\{?$/);
+    if (classDefMatch) {
+      const cName = classDefMatch[1];
+      if (!classesMap.has(cName)) {
+        classesMap.set(cName, {
+          id: cName.toLowerCase(),
+          type: 'uml-class',
+          x: 0,
+          y: 0,
+          width: 220,
+          height: 120,
+          text: cName,
+          fillColor: '#f8fafc',
+          strokeColor: '#334155',
+          strokeWidth: 2,
+          textColor: '#0f172a',
+          fontSize: 12,
+          cornerRadius: 6,
+          umlMembers: [],
+        });
       }
-      const vis = line[0] === '+' || line[0] === '-' || line[0] === '#' ? (line[0] as any) : '+';
-      const cleanMember = cleanMermaidLabel(line.replace(/^[+\-#~]\s*/, ''));
-      const isMethod = cleanMember.includes('(');
-      currentClass.umlMembers?.push({
-        id: `m-${currentClass.umlMembers.length + 1}`,
+      continue;
+    }
+
+    // Class member: ClassName : +method()
+    const memberMatch = line.match(/^([a-zA-Z0-9_\-]+)\s*:\s*([+\-#~])?\s*([a-zA-Z0-9_\(\)\s:]+)$/);
+    if (memberMatch) {
+      const cName = memberMatch[1];
+      const vis = (memberMatch[2] || '+') as '+' | '-' | '#' | '~';
+      const signature = memberMatch[3].trim();
+
+      let node = classesMap.get(cName);
+      if (!node) {
+        node = {
+          id: cName.toLowerCase(),
+          type: 'uml-class',
+          x: 0,
+          y: 0,
+          width: 220,
+          height: 100,
+          text: cName,
+          fillColor: '#f8fafc',
+          strokeColor: '#334155',
+          strokeWidth: 2,
+          textColor: '#0f172a',
+          fontSize: 12,
+          cornerRadius: 6,
+          umlMembers: [],
+        };
+        classesMap.set(cName, node);
+      }
+
+      node.umlMembers?.push({
+        id: `mem-${(node.umlMembers?.length || 0) + 1}`,
         visibility: vis,
-        name: cleanMember,
-        isMethod,
+        name: cleanMermaidLabel(signature),
+        isMethod: signature.includes('('),
       });
-      currentClass.height += 24;
+      node.height += 22;
       continue;
     }
 
-    const classHeaderMatch = line.match(/^class\s+([a-zA-Z0-9_\-]+)\s*\{$/);
-    if (classHeaderMatch) {
-      const name = classHeaderMatch[1];
-      const cls: DiagramNode = {
-        id: name.toLowerCase(),
-        type: 'uml-class',
-        x: 0,
-        y: 0,
-        width: 240,
-        height: 100,
-        text: name,
-        fillColor: '#f8fafc',
-        strokeColor: '#334155',
-        strokeWidth: 2,
-        textColor: '#0f172a',
-        fontSize: 13,
-        fontBold: true,
-        cornerRadius: 8,
-        umlMembers: [],
-      };
-      classMap.set(name, cls);
-      currentClass = cls;
-      continue;
-    }
-
-    // Relationship: ClassA <|-- ClassB
-    const relMatch = line.match(/^([a-zA-Z0-9_\-]+)\s*(<\|--|--\|>|-->|<--|\*--|--\*)\s*([a-zA-Z0-9_\-]+)/);
+    // Class relations: ClassA <|-- ClassB
+    const relMatch = line.match(/^([a-zA-Z0-9_\-]+)\s*(<\|--|--\|>|\*--|--\*|o--|--o|-->|--)\s*([a-zA-Z0-9_\-]+)(?:\s*:\s*"?([^"]*)"?)?$/);
     if (relMatch) {
-      const from = relMatch[1];
-      const to = relMatch[3];
-      const getOrCreate = (n: string) => {
-        let node = classMap.get(n);
+      const fromName = relMatch[1];
+      const toName = relMatch[3];
+      const label = relMatch[4] ? cleanMermaidLabel(relMatch[4]) : undefined;
+
+      const getOrCreateClass = (name: string): DiagramNode => {
+        let node = classesMap.get(name);
         if (!node) {
           node = {
-            id: n.toLowerCase(),
+            id: name.toLowerCase(),
             type: 'uml-class',
             x: 0,
             y: 0,
             width: 220,
-            height: 110,
-            text: n,
+            height: 100,
+            text: name,
             fillColor: '#f8fafc',
             strokeColor: '#334155',
             strokeWidth: 2,
             textColor: '#0f172a',
-            fontSize: 13,
-            fontBold: true,
-            cornerRadius: 8,
+            fontSize: 12,
+            cornerRadius: 6,
             umlMembers: [],
           };
-          classMap.set(n, node);
+          classesMap.set(name, node);
         }
         return node;
       };
-      const n1 = getOrCreate(from);
-      const n2 = getOrCreate(to);
+
+      const sourceNode = getOrCreateClass(fromName);
+      const targetNode = getOrCreateClass(toName);
+
       edges.push({
-        id: `class-edge-${edges.length + 1}`,
-        from: n1.id,
-        to: n2.id,
-        label: 'inherits',
+        id: `class-rel-${edges.length + 1}`,
+        from: sourceNode.id,
+        to: targetNode.id,
+        label,
         style: 'solid',
         routing: 'orthogonal',
-        strokeColor: '#475569',
+        strokeColor: '#334155',
         strokeWidth: 2,
         arrowEnd: 'arrow',
       });
     }
   }
 
-  const nodes = Array.from(classMap.values());
-  applyAutoLayout(nodes, edges, false);
+  const nodes = Array.from(classesMap.values());
+  applyDagreLayout(nodes, edges, 'TB');
 
   return {
     success: true,
@@ -537,65 +667,46 @@ function parseStateDiagram(lines: string[]): MermaidParseResult {
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
-    const transMatch = line.match(/^([a-zA-Z0-9_\*]+)\s*-->\s*([a-zA-Z0-9_\*]+)(?:\s*:\s*(.*))?$/);
+
+    // State transition: StateA --> StateB : Label
+    const transMatch = line.match(/^([a-zA-Z0-9_\[\*\]]+)\s*-->\s*([a-zA-Z0-9_\[\*\]]+)(?:\s*:\s*(.*))?$/);
     if (transMatch) {
-      let from = transMatch[1];
-      let to = transMatch[2];
+      const rawFrom = transMatch[1];
+      const rawTo = transMatch[2];
       const label = transMatch[3] ? cleanMermaidLabel(transMatch[3]) : undefined;
 
       const getOrCreateState = (name: string): DiagramNode => {
-        if (name === '[*]') {
-          const isInitial = !nodesMap.has('state_start');
-          const id = isInitial ? 'state_start' : `state_end_${nodesMap.size}`;
-          const circleNode: DiagramNode = {
-            id,
-            type: 'circle',
-            x: 0,
-            y: 0,
-            width: 50,
-            height: 50,
-            text: isInitial ? 'Start' : 'End',
-            fillColor: '#0f172a',
-            strokeColor: '#334155',
-            strokeWidth: 2,
-            textColor: '#ffffff',
-            fontSize: 10,
-            cornerRadius: 0,
-          };
-          nodesMap.set(id, circleNode);
-          return circleNode;
-        }
-
-        let node = nodesMap.get(name);
+        const isStartEnd = name === '[*]';
+        const id = isStartEnd ? `state-${Date.now().toString().slice(-4)}-${nodesMap.size}` : name;
+        let node = nodesMap.get(id);
         if (!node) {
           node = {
-            id: name.toLowerCase(),
-            type: 'rounded',
+            id,
+            type: isStartEnd ? 'circle' : 'rounded',
             x: 0,
             y: 0,
-            width: 150,
-            height: 70,
-            text: cleanMermaidLabel(name),
-            fillColor: '#eff6ff',
-            strokeColor: '#2563eb',
+            width: isStartEnd ? 40 : 160,
+            height: isStartEnd ? 40 : 60,
+            text: isStartEnd ? '' : cleanMermaidLabel(name),
+            fillColor: isStartEnd ? '#0f172a' : '#f8fafc',
+            strokeColor: '#0f172a',
             strokeWidth: 2,
-            textColor: '#1e3a8a',
+            textColor: '#0f172a',
             fontSize: 12,
-            fontBold: true,
-            cornerRadius: 14,
+            cornerRadius: isStartEnd ? 20 : 12,
           };
-          nodesMap.set(name, node);
+          nodesMap.set(id, node);
         }
         return node;
       };
 
-      const s1 = getOrCreateState(from);
-      const s2 = getOrCreateState(to);
+      const sourceNode = getOrCreateState(rawFrom);
+      const targetNode = getOrCreateState(rawTo);
 
       edges.push({
-        id: `state-edge-${edges.length + 1}`,
-        from: s1.id,
-        to: s2.id,
+        id: `state-rel-${edges.length + 1}`,
+        from: sourceNode.id,
+        to: targetNode.id,
         label,
         style: 'solid',
         routing: 'curved',
@@ -607,7 +718,7 @@ function parseStateDiagram(lines: string[]): MermaidParseResult {
   }
 
   const nodes = Array.from(nodesMap.values());
-  applyAutoLayout(nodes, edges, false);
+  applyDagreLayout(nodes, edges, 'TB');
 
   return {
     success: true,
@@ -624,23 +735,60 @@ function parseStateDiagram(lines: string[]): MermaidParseResult {
 }
 
 /**
- * Calculates a clean topological/grid layout for imported nodes
+ * Calculates a clean hierarchical layout using Dagre graph layout engine
+ * matching Mermaid's live layout behavior (TB, LR, BT, RL, ranks, node separation).
  */
-function applyAutoLayout(nodes: DiagramNode[], edges: DiagramEdge[], isHorizontal: boolean) {
+export function applyDagreLayout(nodes: DiagramNode[], edges: DiagramEdge[], rankdir = 'TB') {
   if (nodes.length === 0) return;
 
-  const cols = isHorizontal ? Math.max(2, Math.ceil(Math.sqrt(nodes.length))) : Math.min(3, nodes.length);
-  const colSpacing = 320;
-  const rowSpacing = 220;
-  const startX = 100;
-  const startY = 100;
+  try {
+    const g = new (graphlib as any).Graph();
+    g.setGraph({
+      rankdir,
+      nodesep: 60,
+      ranksep: 90,
+      marginx: 80,
+      marginy: 80,
+    });
+    g.setDefaultEdgeLabel(() => ({}));
 
-  nodes.forEach((node, index) => {
-    const col = index % cols;
-    const row = Math.floor(index / cols);
-    node.x = startX + col * colSpacing;
-    node.y = startY + row * rowSpacing;
-  });
+    // Register all nodes with their estimated/actual dimensions
+    nodes.forEach(node => {
+      g.setNode(node.id, {
+        width: node.width,
+        height: node.height,
+      });
+    });
+
+    // Register edges
+    edges.forEach(edge => {
+      if (g.hasNode(edge.from) && g.hasNode(edge.to)) {
+        g.setEdge(edge.from, edge.to);
+      }
+    });
+
+    // Run dagre layout computation
+    (dagre as any).layout(g);
+
+    // Apply calculated positions (converting Dagre's center coordinates to top-left)
+    nodes.forEach(node => {
+      const dagreNode = g.node(node.id);
+      if (dagreNode) {
+        node.x = Math.round(dagreNode.x - node.width / 2);
+        node.y = Math.round(dagreNode.y - node.height / 2);
+      }
+    });
+  } catch (err) {
+    console.warn('Dagre layout fallback:', err);
+    // Fallback simple grid if dagre fails
+    const cols = rankdir === 'LR' ? Math.max(2, Math.ceil(Math.sqrt(nodes.length))) : Math.min(3, nodes.length);
+    nodes.forEach((node, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      node.x = 100 + col * 320;
+      node.y = 100 + row * 220;
+    });
+  }
 }
 
 /**
