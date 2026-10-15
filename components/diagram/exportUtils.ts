@@ -39,7 +39,6 @@ function renderShapeSvg(n: DiagramNode, x: number, y: number): string {
       return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="14" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />`;
     }
     case 'card': {
-      // Modern information card with colored pill header
       const headerH = 34;
       return `
         <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${n.cornerRadius || 16}" fill="#ffffff" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
@@ -57,7 +56,7 @@ function renderShapeSvg(n: DiagramNode, x: number, y: number): string {
 
 /**
  * Generates an SVG string representation of a DiagramDocument
- * including all nodes, edges, styling, and text layers.
+ * matching the exact on-canvas layout, cardinalities, and colors.
  */
 export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -81,11 +80,14 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW / scale} ${totalH / scale}">
     <defs>
-      <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569" />
+      <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#475569" />
       </marker>
-      <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-        <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" stroke-width="1.5" fill="none" />
+      <marker id="crowfoot" viewBox="0 0 20 20" refX="18" refY="10" markerWidth="16" markerHeight="16" orient="auto">
+        <path d="M 2 2 L 18 10 L 2 18 M 18 2 L 18 18 M 12 4 L 12 16" fill="none" stroke="#475569" stroke-width="2.5" stroke-linecap="round" />
+      </marker>
+      <marker id="one" viewBox="0 0 20 20" refX="10" refY="10" markerWidth="14" markerHeight="14" orient="auto">
+        <path d="M 6 2 L 6 18 M 14 2 L 14 18" fill="none" stroke="#475569" stroke-width="2.5" stroke-linecap="round" />
       </marker>
       <marker id="circle" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
         <circle cx="5" cy="5" r="4" fill="#0ea5e9" />
@@ -122,9 +124,16 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
     );
 
     const dash = e.style === 'dashed' ? 'stroke-dasharray="6,4"' : e.style === 'dotted' ? 'stroke-dasharray="2,4"' : '';
-    const marker = e.arrowEnd === 'crowfoot' ? 'marker-end="url(#crowfoot)"' : e.arrowEnd === 'circle' ? 'marker-end="url(#circle)"' : 'marker-end="url(#arrow)"';
+    let markerAttr = 'marker-end="url(#arrow)"';
+    if (e.cardinality === '1:N' || e.cardinality === 'N:M') {
+      markerAttr = 'marker-end="url(#crowfoot)" marker-start="url(#one)"';
+    } else if (e.arrowEnd === 'crowfoot') {
+      markerAttr = 'marker-end="url(#crowfoot)"';
+    } else if (e.arrowEnd === 'circle') {
+      markerAttr = 'marker-end="url(#circle)"';
+    }
 
-    svg += `<path d="${pathData}" fill="none" stroke="${e.strokeColor}" stroke-width="${e.strokeWidth}" ${dash} ${marker} />`;
+    svg += `<path d="${pathData}" fill="none" stroke="${e.strokeColor}" stroke-width="${e.strokeWidth}" ${dash} ${markerAttr} />`;
 
     if (e.label) {
       svg += `
@@ -157,10 +166,8 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
         `;
       });
     } else if (n.type === 'card') {
-      // Modern Information Card
       svg += renderShapeSvg(n, x, y);
       const headerH = 34;
-      // Header Title & Badge
       const title = n.headerText || 'CARD';
       svg += `
         <text x="${x + 16}" y="${y + 22}" font-family="Inter, sans-serif" font-size="12" font-weight="900" fill="#ffffff" letter-spacing="0.5">${title}</text>
@@ -171,7 +178,6 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
           <text x="${x + n.width - 18}" y="${y + 21}" font-family="Inter, sans-serif" font-size="10" font-weight="900" fill="${n.fillColor}" text-anchor="middle">${n.badgeText}</text>
         `;
       }
-      // Body Text
       const lines = n.text.split('\n');
       lines.forEach((l, lIdx) => {
         svg += `
@@ -180,7 +186,6 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
       });
     } else {
       svg += renderShapeSvg(n, x, y);
-      // Multi-line text for general shapes
       const lines = n.text.split('\n');
       const startY = y + (n.height - lines.length * 16) / 2 + 12;
       lines.forEach((l, lIdx) => {
@@ -200,38 +205,31 @@ export function exportDocumentToSvg(doc: DiagramDocument, scale = 1): string {
 }
 
 /**
- * Download SVG file directly
+ * Downloads full resolution PNG
  */
-export function downloadSvg(doc: DiagramDocument, filename = 'diagram.svg') {
-  const svgStr = exportDocumentToSvg(doc);
-  const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-/**
- * Export document as PNG
- */
-export function downloadPng(doc: DiagramDocument, scale = 2, filename = 'diagram.png') {
-  const svgStr = exportDocumentToSvg(doc, scale);
-  const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
+export function downloadPng(doc: DiagramDocument, scale = 2) {
+  const svg = exportDocumentToSvg(doc, scale);
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const img = new Image();
+
   img.onload = () => {
     const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
+    canvas.width = img.width;
+    canvas.height = img.height;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(img, 0, 0);
-      const link = document.createElement('a');
-      link.href = canvas.toDataURL('image/png');
-      link.download = filename;
-      link.click();
+      canvas.toBlob(pngBlob => {
+        if (pngBlob) {
+          const pngUrl = URL.createObjectURL(pngBlob);
+          const a = document.createElement('a');
+          a.href = pngUrl;
+          a.download = `${(doc.title || 'diagram').toLowerCase().replace(/\s+/g, '-')}.png`;
+          a.click();
+          URL.revokeObjectURL(pngUrl);
+        }
+      }, 'image/png');
     }
     URL.revokeObjectURL(url);
   };
@@ -239,15 +237,29 @@ export function downloadPng(doc: DiagramDocument, scale = 2, filename = 'diagram
 }
 
 /**
- * Save native JSON project format
+ * Downloads Vector SVG
  */
-export function downloadNativeJson(doc: DiagramDocument, filename = 'diagram.diagram.json') {
-  const jsonStr = JSON.stringify(doc, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json' });
+export function downloadSvg(doc: DiagramDocument) {
+  const svg = exportDocumentToSvg(doc, 1);
+  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(doc.title || 'diagram').toLowerCase().replace(/\s+/g, '-')}.svg`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads native project JSON
+ */
+export function downloadNativeJson(doc: DiagramDocument) {
+  const str = JSON.stringify(doc, null, 2);
+  const blob = new Blob([str], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(doc.title || 'diagram').toLowerCase().replace(/\s+/g, '-')}.diagram.json`;
+  a.click();
   URL.revokeObjectURL(url);
 }

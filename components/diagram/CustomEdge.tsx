@@ -70,48 +70,48 @@ export const CustomDiagramEdgeComponent: React.FC<EdgeProps> = memo(({
 
   const strokeDasharray = lineStyle === 'dashed' ? '6,4' : lineStyle === 'dotted' ? '2,4' : undefined;
 
-  // Compute marker SVG IDs based on stroke color
-  const crowfootMarkerId = `crowfoot-${id}`;
-  const oneMarkerId = `one-${id}`;
+  // High-contrast, large, clearly-visible markers for ERD relationships
+  const crowfootMarkerId = `crowfoot-marker-${id}`;
+  const oneMarkerId = `one-marker-${id}`;
 
   return (
     <>
       <svg style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, pointerEvents: 'none' }}>
         <defs>
-          {/* Crow's foot marker (many relationship) */}
+          {/* Distinct high-visibility Crow's foot marker (Many) */}
           <marker
             id={crowfootMarkerId}
-            viewBox="0 0 16 16"
-            refX="14"
-            refY="8"
-            markerWidth="12"
-            markerHeight="12"
+            viewBox="0 0 20 20"
+            refX="18"
+            refY="10"
+            markerWidth="16"
+            markerHeight="16"
             orient="auto"
           >
             <path
-              d="M 2 2 L 14 8 L 2 14 M 14 2 L 14 14"
+              d="M 2 2 L 18 10 L 2 18 M 18 2 L 18 18 M 12 4 L 12 16"
               fill="none"
               stroke={strokeColor}
-              strokeWidth="2"
+              strokeWidth="2.5"
               strokeLinecap="round"
             />
           </marker>
 
-          {/* Exactly one / mandatory one marker */}
+          {/* Distinct high-visibility Mandatory One marker (1) */}
           <marker
             id={oneMarkerId}
-            viewBox="0 0 16 16"
-            refX="14"
-            refY="8"
-            markerWidth="10"
-            markerHeight="10"
+            viewBox="0 0 20 20"
+            refX="10"
+            refY="10"
+            markerWidth="14"
+            markerHeight="14"
             orient="auto"
           >
             <path
-              d="M 6 2 L 6 14 M 12 2 L 12 14"
+              d="M 6 2 L 6 18 M 14 2 L 14 18"
               fill="none"
               stroke={strokeColor}
-              strokeWidth="2"
+              strokeWidth="2.5"
               strokeLinecap="round"
             />
           </marker>
@@ -133,7 +133,7 @@ export const CustomDiagramEdgeComponent: React.FC<EdgeProps> = memo(({
             : markerEnd
         }
         markerStart={
-          cardinality === '1:N'
+          cardinality === '1:N' || cardinality === '1:1'
             ? `url(#${oneMarkerId})`
             : markerStart
         }

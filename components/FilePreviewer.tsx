@@ -461,12 +461,15 @@ const PDFPreviewer: React.FC<{
             rotation: (rotations?.[i] || 0) + globalRot,
           });
           const canvas = document.createElement("canvas");
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          const ctx = canvas.getContext("2d");
+          canvas.width = Math.min(viewport.width, 200);
+          canvas.height = Math.min(viewport.height, 280);
+          const ctx = canvas.getContext("2d", { willReadFrequently: false });
           if (!ctx) continue;
           await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-          nextThumbs.push(canvas.toDataURL("image/jpeg", 0.82));
+          nextThumbs.push(canvas.toDataURL("image/jpeg", 0.7));
+          // Free canvas memory explicitly
+          canvas.width = 0;
+          canvas.height = 0;
         }
         if (!cancelled) setThumbnails(nextThumbs);
       } catch {
