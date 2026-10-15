@@ -1,0 +1,9 @@
+
+fastapi
+uvicorn
+python-multipart
+pymupdf
+pdf2docx
+python-pptx
+pdfplumber
+img2pdf

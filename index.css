@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global Styles */
+body {
+  background-color: #f1f5f9;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Redline Diff Styles */
+.diff-added {
+  background-color: #dcfce7;
+  color: #065f46;
+  padding: 0 1px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #86efac;
+  font-weight: 600;
+  display: inline;
+}
+.diff-removed {
+  background-color: #fee2e2;
+  color: #9f1239;
+  text-decoration: line-through;
+  padding: 0 1px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #fda4af;
+  font-weight: 600;
+  display: inline;
+}
+.diff-similar {
+  background-color: #fef9c3;
+  color: #854d0e;
+  padding: 0 2px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #fde047;
+  display: inline;
+}
+
+/* Excel Content Styling */
+.excel-content-container table {
+  border-collapse: collapse;
+  background-color: #ffffff !important;
+  color: #1e293b !important; /* Explicit high-contrast text */
+  font-size: 12px;
+  font-family: "Inter", sans-serif;
+  min-width: 100%;
+}
+.excel-content-container th,
+.excel-content-container td {
+  border: 1px solid #e2e8f0 !important;
+  padding: 8px 12px !important;
+  text-align: left;
+  white-space: nowrap;
+  color: #1e293b !important;
+}
+.excel-content-container th {
+  background-color: #f8fafc !important;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569 !important;
+}
+.excel-content-container tr:nth-child(even) {
+  background-color: #f8fafc !important;
+}
+
+/* Word Content Styling */
+.word-content-container {
+  font-family: "Georgia", "Times New Roman", serif;
+  color: #1a1a1a !important;
+  line-height: 1.6;
+  background-color: #ffffff !important;
+}
+.word-content-container h1,
+.word-content-container h2,
+.word-content-container h3,
+.word-content-container h4,
+.word-content-container p,
+.word-content-container span,
+.word-content-container li {
+  color: #1a1a1a !important;
+}
+.word-content-container h1 {
+  font-size: 28pt;
+  font-weight: 800;
+  margin-bottom: 16pt;
+  border-bottom: 2px solid #f0f0f0;
+  padding-bottom: 12px;
+}
+.word-content-container h2 {
+  font-size: 22pt;
+  font-weight: 700;
+  margin-top: 28pt;
+  margin-bottom: 14pt;
+}
+.word-content-container h3 {
+  font-size: 18pt;
+  font-weight: 700;
+  margin-top: 20pt;
+  margin-bottom: 12pt;
+}
+.word-content-container p {
+  margin-bottom: 14pt;
+}
+.word-content-container table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 2rem 0;
+  border: 1px solid #e2e8f0;
+}
+.word-content-container td,
+.word-content-container th {
+  border: 1px solid #e2e8f0;
+  padding: 12px;
+}
+
+/* Code Inspector Styling */
+.code-preview-container {
+  display: flex;
+  min-height: 100%;
+  font-family:
+    "JetBrains Mono", "Fira Code", "Menlo", "Monaco", "Consolas", monospace;
+}
+.code-line-numbers {
+  padding: 1.5rem 0.75rem;
+  text-align: right;
+  color: #484f58;
+  background-color: #0d1117;
+  border-right: 1px solid #30363d;
+  min-width: 3.5rem;
+  user-select: none;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.code-content {
+  padding: 1.5rem;
+  color: #e6edf3;
+  background-color: #0d1117;
+  flex: 1;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Professional Page Effect */
+.paper-effect {
+  position: relative;
+  background-color: #ffffff !important;
+  box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  display: block;
+  z-index: 1;
+}
+
+/* Tray Visibility Animations */
+.tray-transition {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
