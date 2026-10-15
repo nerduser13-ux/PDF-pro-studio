@@ -1,198 +1,174 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import mermaid from 'mermaid';
-import { 
-  Square, 
-  Circle, 
-  Diamond, 
-  Database, 
-  Layers, 
-  Type, 
-  Move, 
-  Trash2, 
-  Plus, 
-  Download, 
-  Copy, 
-  Sparkles, 
-  RotateCcw, 
-  Palette, 
-  ZoomIn, 
-  ZoomOut, 
-  Maximize2, 
-  Code, 
-  Check, 
-  Sliders, 
-  CornerDownRight, 
-  MousePointer2, 
+import {
+  Square,
+  Circle,
+  Diamond,
+  Database,
+  Layers,
+  Type,
+  Move,
+  Trash2,
+  Plus,
+  Download,
+  Copy,
+  Sparkles,
+  RotateCcw,
+  Palette,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
   FileCode,
   Layout,
-  Workflow
+  Workflow,
+  Check,
+  Sliders,
+  CornerDownRight,
+  MousePointer2,
+  FolderOpen,
+  Save,
+  Undo2,
+  Redo2,
+  Upload,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  Bold,
+  Italic,
+  Eye,
+  Grid,
+  FileText,
+  Search,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 
-export type ShapeType = 'rectangle' | 'rounded' | 'circle' | 'diamond' | 'cylinder' | 'er-table';
-export type ArrowStyle = 'solid' | 'dashed' | 'dotted';
-export type ArrowHead = 'arrow' | 'crowfoot' | 'circle' | 'none';
+import {
+  DiagramDocument,
+  DiagramNode,
+  DiagramEdge,
+  ShapeType,
+  ArrowStyle,
+  ArrowHead,
+  RoutingType,
+  AnchorPosition,
+  ViewportTransform
+} from '../diagram/types';
+import { getNodeAnchorPoint, computeEdgePath } from '../diagram/geometry';
+import { DIAGRAM_TEMPLATES, TemplateDefinition } from '../diagram/templates';
+import { parseMermaidToDocument, exportDocumentToMermaid } from '../diagram/mermaidConverter';
+import { downloadPng, downloadSvg, downloadNativeJson } from '../diagram/exportUtils';
 
-export interface DiagramNode {
-  id: string;
-  type: ShapeType;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  text: string;
-  fillColor: string;
-  strokeColor: string;
-  strokeWidth: number;
-  textColor: string;
-  fontSize: number;
-  cornerRadius: number;
-  // ER Table specific fields:
-  fields?: { name: string; type: string; isPk?: boolean; isFk?: boolean }[];
-}
-
-export interface DiagramEdge {
-  id: string;
-  from: string;
-  to: string;
-  label?: string;
-  style: ArrowStyle;
-  strokeColor: string;
-  strokeWidth: number;
-  arrowStart?: ArrowHead;
-  arrowEnd: ArrowHead;
-}
-
-const PRESET_COLORS = [
-  '#4f46e5', '#2563eb', '#0284c7', '#0d9488', 
-  '#059669', '#16a34a', '#d97706', '#ea580c', 
-  '#e11d48', '#9333ea', '#475569', '#0f172a'
+const COLOR_PRESETS = [
+  '#4f46e5', '#2563eb', '#0284c7', '#0d9488',
+  '#059669', '#16a34a', '#d97706', '#ea580c',
+  '#e11d48', '#9333ea', '#475569', '#0f172a',
+  '#ffffff', '#f8fafc', '#ecfdf5', '#eff6ff', '#fef3c7', '#fff1f2'
 ];
 
-const SAMPLE_MERMAID_CODE = `erDiagram
-    CUSTOMER ||--o{ ORDER : places
-    ORDER ||--|{ LINE_ITEM : contains
-    CUSTOMER }|..|{ DELIVERY_ADDRESS : uses
-
-    CUSTOMER {
-        string id PK
-        string full_name
-        string email
-    }
-    ORDER {
-        int order_no PK
-        string user_id FK
-        decimal amount
-    }
-    LINE_ITEM {
-        int id PK
-        int order_no FK
-        int quantity
-    }`;
+const INITIAL_DOC: DiagramDocument = DIAGRAM_TEMPLATES[0].createDocument();
 
 export const DiagramStudio: React.FC = () => {
-  // Modes: visual editor or Mermaid code editor
+  // Primary Diagram State (Single source of truth)
+  const [doc, setDoc] = useState<DiagramDocument>(INITIAL_DOC);
+
+  // Undo / Redo History Stack
+  const historyStack = useRef<DiagramDocument[]>([INITIAL_DOC]);
+  const redoStack = useRef<DiagramDocument[]>([]);
+  const isUndoRedoAction = useRef(false);
+
+  // Tab State
   const [activeTab, setActiveTab] = useState<'visual' | 'mermaid'>('visual');
-  const [zoom, setZoom] = useState(1);
 
-  // Nodes & Edges
-  const [nodes, setNodes] = useState<DiagramNode[]>([
-    {
-      id: 'node-1',
-      type: 'er-table',
-      x: 80,
-      y: 100,
-      width: 240,
-      height: 180,
-      text: 'USERS',
-      fillColor: '#4f46e5',
-      strokeColor: '#312e81',
-      strokeWidth: 2,
-      textColor: '#ffffff',
-      fontSize: 13,
-      cornerRadius: 12,
-      fields: [
-        { name: 'id', type: 'uuid', isPk: true },
-        { name: 'email', type: 'varchar(255)' },
-        { name: 'full_name', type: 'varchar(100)' },
-        { name: 'created_at', type: 'timestamp' }
-      ]
-    },
-    {
-      id: 'node-2',
-      type: 'er-table',
-      x: 440,
-      y: 100,
-      width: 240,
-      height: 180,
-      text: 'ORDERS',
-      fillColor: '#059669',
-      strokeColor: '#065f46',
-      strokeWidth: 2,
-      textColor: '#ffffff',
-      fontSize: 13,
-      cornerRadius: 12,
-      fields: [
-        { name: 'id', type: 'uuid', isPk: true },
-        { name: 'user_id', type: 'uuid', isFk: true },
-        { name: 'total_amount', type: 'decimal(10,2)' },
-        { name: 'status', type: 'varchar(30)' }
-      ]
-    },
-    {
-      id: 'node-3',
-      type: 'cylinder',
-      x: 760,
-      y: 130,
-      width: 160,
-      height: 120,
-      text: 'PostgreSQL DB',
-      fillColor: '#0284c7',
-      strokeColor: '#0369a1',
-      strokeWidth: 2,
-      textColor: '#ffffff',
-      fontSize: 14,
-      cornerRadius: 0
-    }
-  ]);
+  // Viewport / Pan & Zoom
+  const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, zoom: 1 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  const [edges, setEdges] = useState<DiagramEdge[]>([
-    {
-      id: 'edge-1',
-      from: 'node-1',
-      to: 'node-2',
-      label: 'places (1:N)',
-      style: 'solid',
-      strokeColor: '#4f46e5',
-      strokeWidth: 2,
-      arrowEnd: 'crowfoot'
-    },
-    {
-      id: 'edge-2',
-      from: 'node-2',
-      to: 'node-3',
-      label: 'persists to',
-      style: 'dashed',
-      strokeColor: '#0284c7',
-      strokeWidth: 2,
-      arrowEnd: 'arrow'
-    }
-  ]);
-
-  // Selected object state
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>('node-1');
+  // Selection & Interactions
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
-  // Dragging state
-  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Dragging Nodes
+  const [isDraggingNode, setIsDraggingNode] = useState(false);
+  const dragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const dragPointerStart = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Mermaid tab state
-  const [mermaidText, setMermaidText] = useState<string>(SAMPLE_MERMAID_CODE);
+  // Resizing Node
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeNodeId = useRef<string | null>(null);
+  const resizeInitial = useRef<{ x: number; y: number; width: number; height: number }>({ x: 0, y: 0, width: 0, height: 0 });
+  const resizeHandle = useRef<string>('se');
+
+  // Interactive Connector Creation
+  const [isConnecting, setIsConnecting] = useState(false);
+  const connectingSource = useRef<{ nodeId: string; anchor: AnchorPosition } | null>(null);
+  const [connectionPointer, setConnectionPointer] = useState<{ x: number; y: number } | null>(null);
+
+  // Selection Box
+  const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+
+  // Inline Label Editing
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+
+  // Template Modal
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [templateCategory, setTemplateCategory] = useState<string>('All');
+
+  // Mermaid Tab
+  const [mermaidText, setMermaidText] = useState<string>('');
   const [mermaidSvg, setMermaidSvg] = useState<string>('');
   const [mermaidError, setMermaidError] = useState<string | null>(null);
+  const [importNotification, setImportNotification] = useState<string | null>(null);
 
-  // Canvas container ref
-  const boardRef = useRef<HTMLDivElement>(null);
+  // Canvas Reference
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Save history commit
+  const commitToHistory = useCallback((newDoc: DiagramDocument) => {
+    if (isUndoRedoAction.current) return;
+    historyStack.current.push(newDoc);
+    if (historyStack.current.length > 50) historyStack.current.shift();
+    redoStack.current = [];
+  }, []);
+
+  const updateDoc = useCallback((updater: (prev: DiagramDocument) => DiagramDocument, recordHistory = true) => {
+    setDoc(prev => {
+      const next = updater(prev);
+      if (recordHistory) {
+        commitToHistory(next);
+      }
+      return next;
+    });
+  }, [commitToHistory]);
+
+  // Undo / Redo handlers
+  const handleUndo = useCallback(() => {
+    if (historyStack.current.length <= 1) return;
+    isUndoRedoAction.current = true;
+    const current = historyStack.current.pop();
+    if (current) redoStack.current.push(current);
+    const prev = historyStack.current[historyStack.current.length - 1];
+    setDoc(prev);
+    setSelectedNodeIds([]);
+    setSelectedEdgeId(null);
+    isUndoRedoAction.current = false;
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.current.length === 0) return;
+    isUndoRedoAction.current = true;
+    const next = redoStack.current.pop();
+    if (next) {
+      historyStack.current.push(next);
+      setDoc(next);
+      setSelectedNodeIds([]);
+      setSelectedEdgeId(null);
+    }
+    isUndoRedoAction.current = false;
+  }, []);
 
   // Initialize Mermaid
   useEffect(() => {
@@ -203,13 +179,22 @@ export const DiagramStudio: React.FC = () => {
     });
   }, []);
 
-  // Sync Mermaid preview
+  // Convert screen coordinates to world coordinates
+  const screenToWorld = useCallback((clientX: number, clientY: number) => {
+    if (!canvasRef.current) return { x: 0, y: 0 };
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = (clientX - rect.left - viewport.x) / viewport.zoom;
+    const y = (clientY - rect.top - viewport.y) / viewport.zoom;
+    return { x, y };
+  }, [viewport]);
+
+  // Sync Mermaid preview on code changes
   useEffect(() => {
     if (activeTab !== 'mermaid') return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const id = `mermaid-studio-${Date.now()}`;
+        const id = `mermaid-render-${Date.now()}`;
         const { svg } = await mermaid.render(id, mermaidText);
         if (!cancelled) {
           setMermaidSvg(svg);
@@ -217,354 +202,436 @@ export const DiagramStudio: React.FC = () => {
         }
       } catch (err: any) {
         if (!cancelled) {
-          setMermaidError(err?.message || 'Mermaid parsing error');
+          setMermaidError(err?.message || 'Syntax error in Mermaid specification');
         }
       }
     }, 300);
+
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
   }, [mermaidText, activeTab]);
 
-  const selectedNode = nodes.find(n => n.id === selectedNodeId);
-  const selectedEdge = edges.find(e => e.id === selectedEdgeId);
+  // Switch to Mermaid tab: serialize current document
+  const handleSwitchToMermaid = () => {
+    const generated = exportDocumentToMermaid(doc);
+    setMermaidText(generated);
+    setActiveTab('mermaid');
+  };
 
-  // Node Drag handlers
-  const handleNodeMouseDown = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    setSelectedNodeId(id);
-    setSelectedEdgeId(null);
-    setDraggingNodeId(id);
-    const node = nodes.find(n => n.id === id);
-    if (node) {
-      setDragOffset({
-        x: (e.clientX / zoom) - node.x,
-        y: (e.clientY / zoom) - node.y
-      });
+  // Import Mermaid code into native document
+  const handleImportMermaidToCanvas = () => {
+    const res = parseMermaidToDocument(mermaidText);
+    if (!res.success || !res.document) {
+      setMermaidError(res.error || 'Failed to parse Mermaid code');
+      return;
     }
+    setDoc(res.document);
+    commitToHistory(res.document);
+    setActiveTab('visual');
+    setSelectedNodeIds([]);
+    setSelectedEdgeId(null);
+    setImportNotification(`Successfully imported ${res.diagramType || 'diagram'} with ${res.document.nodes.length} nodes and ${res.document.edges.length} connectors into the canvas!`);
+    setTimeout(() => setImportNotification(null), 4000);
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!draggingNodeId) return;
-    const newX = Math.round((e.clientX / zoom) - dragOffset.x);
-    const newY = Math.round((e.clientY / zoom) - dragOffset.y);
-    setNodes(prev =>
-      prev.map(n => (n.id === draggingNodeId ? { ...n, x: Math.max(10, newX), y: Math.max(10, newY) } : n))
+  // Add new Shape Node from palette
+  const handleAddShape = (type: ShapeType) => {
+    // Drop at viewport center or offset
+    const centerWorld = screenToWorld(
+      (canvasRef.current?.clientWidth || 800) / 2,
+      (canvasRef.current?.clientHeight || 600) / 2
     );
-  };
 
-  const handleMouseUp = () => {
-    setDraggingNodeId(null);
-  };
-
-  // Add standard shapes
-  const addShape = (type: ShapeType) => {
     const id = `node-${Date.now().toString().slice(-4)}`;
-    const randomColor = PRESET_COLORS[Math.floor(Math.random() * PRESET_COLORS.length)];
-    let width = 160;
-    let height = 90;
-    let text = 'New Block';
-    let fields: any = undefined;
+    let width = 180;
+    let height = 80;
+    let text = 'New Shape';
+    let cornerRadius = 8;
+    let fillColor = '#eff6ff';
+    let strokeColor = '#2563eb';
+    let fields = undefined;
+    let umlMembers = undefined;
 
     if (type === 'circle') {
-      width = 120;
-      height = 120;
-      text = 'State';
+      width = 100; height = 100; text = 'State'; fillColor = '#ecfdf5'; strokeColor = '#059669';
     } else if (type === 'diamond') {
-      width = 140;
-      height = 100;
-      text = 'Decision?';
+      width = 140; height = 100; text = 'Decision?'; fillColor = '#fef3c7'; strokeColor = '#d97706';
     } else if (type === 'cylinder') {
-      width = 150;
-      height = 110;
-      text = 'Database';
+      width = 150; height = 110; text = 'Database Storage'; fillColor = '#f0fdf4'; strokeColor = '#16a34a';
+    } else if (type === 'sticky') {
+      width = 160; height = 120; text = 'Note / Idea'; fillColor = '#fef9c3'; strokeColor = '#ca8a04';
+    } else if (type === 'text') {
+      width = 140; height = 50; text = 'Text block'; fillColor = 'transparent'; strokeColor = 'transparent';
+    } else if (type === 'swimlane') {
+      width = 240; height = 450; text = 'CONTAINER'; fillColor = '#f8fafc'; strokeColor = '#cbd5e1';
+    } else if (type === 'uml-class') {
+      width = 220; height = 130; text = 'ClassName'; fillColor = '#f8fafc'; strokeColor = '#334155';
+      umlMembers = [
+        { id: 'm1', visibility: '+' as const, name: 'id', type: 'UUID' },
+        { id: 'm2', visibility: '+' as const, name: 'process()', type: 'void', isMethod: true }
+      ];
     } else if (type === 'er-table') {
-      width = 240;
-      height = 180;
-      text = 'NEW_TABLE';
+      width = 250; height = 180; text = 'NEW_TABLE'; fillColor = '#4f46e5'; strokeColor = '#312e81';
       fields = [
-        { name: 'id', type: 'uuid', isPk: true },
-        { name: 'name', type: 'varchar(100)' },
-        { name: 'status', type: 'varchar(50)' }
+        { id: 'f1', name: 'id', type: 'uuid', isPk: true },
+        { id: 'f2', name: 'name', type: 'varchar(100)' },
+        { id: 'f3', name: 'created_at', type: 'timestamp' }
       ];
     }
 
     const newNode: DiagramNode = {
       id,
       type,
-      x: 100 + Math.random() * 200,
-      y: 100 + Math.random() * 150,
+      x: Math.round(centerWorld.x - width / 2),
+      y: Math.round(centerWorld.y - height / 2),
       width,
       height,
       text,
-      fillColor: randomColor,
-      strokeColor: '#1e293b',
+      fillColor,
+      strokeColor,
       strokeWidth: 2,
-      textColor: '#ffffff',
-      fontSize: 13,
-      cornerRadius: type === 'rounded' ? 16 : 8,
-      fields
+      textColor: type === 'er-table' ? '#ffffff' : '#1e293b',
+      fontSize: 12,
+      fontBold: type === 'er-table' || type === 'uml-class',
+      cornerRadius: type === 'rounded' ? 16 : cornerRadius,
+      fields,
+      umlMembers,
     };
 
-    setNodes(prev => [...prev, newNode]);
-    setSelectedNodeId(id);
+    updateDoc(prev => ({
+      ...prev,
+      nodes: [...prev.nodes, newNode],
+    }));
+    setSelectedNodeIds([id]);
     setSelectedEdgeId(null);
   };
 
-  // Delete node
-  const deleteSelectedNode = () => {
-    if (!selectedNodeId) return;
-    setNodes(prev => prev.filter(n => n.id !== selectedNodeId));
-    setEdges(prev => prev.filter(e => e.from !== selectedNodeId && e.to !== selectedNodeId));
-    setSelectedNodeId(null);
+  // Keyboard Shortcuts (Delete, Undo, Redo, Zoom, Copy, Paste)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept when user is typing in input or textarea
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        if (selectedNodeIds.length > 0) {
+          updateDoc(prev => ({
+            ...prev,
+            nodes: prev.nodes.filter(n => !selectedNodeIds.includes(n.id)),
+            edges: prev.edges.filter(ed => !selectedNodeIds.includes(ed.from) && !selectedNodeIds.includes(ed.to)),
+          }));
+          setSelectedNodeIds([]);
+        } else if (selectedEdgeId) {
+          updateDoc(prev => ({
+            ...prev,
+            edges: prev.edges.filter(ed => ed.id !== selectedEdgeId),
+          }));
+          setSelectedEdgeId(null);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        handleRedo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectedNodeIds(doc.nodes.map(n => n.id));
+      } else if (e.key === 'Escape') {
+        setSelectedNodeIds([]);
+        setSelectedEdgeId(null);
+        setIsConnecting(false);
+        setEditingNodeId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNodeIds, selectedEdgeId, doc.nodes, handleUndo, handleRedo, updateDoc]);
+
+  // Pointer Down on Canvas (Pan, Selection box, or Deselect)
+  const handleCanvasPointerDown = (e: React.PointerEvent) => {
+    if (e.button === 1 || e.buttons === 4) {
+      // Middle click: Pan
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - viewport.x, y: e.clientY - viewport.y });
+      return;
+    }
+
+    if (e.target === canvasRef.current || (e.target as HTMLElement).tagName === 'svg') {
+      setSelectedNodeIds([]);
+      setSelectedEdgeId(null);
+      setEditingNodeId(null);
+      // Start rubber band selection box
+      const wPoint = screenToWorld(e.clientX, e.clientY);
+      setSelectionBox({
+        startX: wPoint.x,
+        startY: wPoint.y,
+        currentX: wPoint.x,
+        currentY: wPoint.y
+      });
+    }
   };
 
-  // Add Edge connection
-  const addEdge = (targetId: string) => {
-    if (!selectedNodeId || selectedNodeId === targetId) return;
-    const id = `edge-${Date.now().toString().slice(-4)}`;
+  // Pointer Move on Canvas
+  const handleCanvasPointerMove = (e: React.PointerEvent) => {
+    if (isPanning) {
+      setViewport(v => ({
+        ...v,
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      }));
+      return;
+    }
+
+    if (isConnecting) {
+      const wPoint = screenToWorld(e.clientX, e.clientY);
+      setConnectionPointer(wPoint);
+      return;
+    }
+
+    if (selectionBox) {
+      const wPoint = screenToWorld(e.clientX, e.clientY);
+      setSelectionBox(sb => sb ? { ...sb, currentX: wPoint.x, currentY: wPoint.y } : null);
+      return;
+    }
+
+    if (isResizing && resizeNodeId.current) {
+      const wPoint = screenToWorld(e.clientX, e.clientY);
+      const init = resizeInitial.current;
+      const handle = resizeHandle.current;
+
+      let newWidth = init.width;
+      let newHeight = init.height;
+      let newX = init.x;
+      let newY = init.y;
+
+      if (handle.includes('e')) newWidth = Math.max(60, wPoint.x - init.x);
+      if (handle.includes('s')) newHeight = Math.max(40, wPoint.y - init.y);
+      if (handle.includes('w')) {
+        const dx = wPoint.x - init.x;
+        newWidth = Math.max(60, init.width - dx);
+        newX = init.x + (init.width - newWidth);
+      }
+      if (handle.includes('n')) {
+        const dy = wPoint.y - init.y;
+        newHeight = Math.max(40, init.height - dy);
+        newY = init.y + (init.height - newHeight);
+      }
+
+      setDoc(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n => n.id === resizeNodeId.current ? { ...n, x: newX, y: newY, width: newWidth, height: newHeight } : n)
+      }));
+      return;
+    }
+
+    if (isDraggingNode && selectedNodeIds.length > 0) {
+      const dx = (e.clientX - dragPointerStart.current.x) / viewport.zoom;
+      const dy = (e.clientY - dragPointerStart.current.y) / viewport.zoom;
+
+      setDoc(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n => {
+          const initPos = dragStartPositions.current.get(n.id);
+          if (!initPos) return n;
+          return {
+            ...n,
+            x: Math.round(initPos.x + dx),
+            y: Math.round(initPos.y + dy),
+          };
+        }),
+      }));
+    }
+  };
+
+  // Pointer Up on Canvas
+  const handleCanvasPointerUp = () => {
+    if (isPanning) setIsPanning(false);
+
+    if (isDraggingNode) {
+      setIsDraggingNode(false);
+      commitToHistory(doc);
+    }
+
+    if (isResizing) {
+      setIsResizing(false);
+      resizeNodeId.current = null;
+      commitToHistory(doc);
+    }
+
+    if (selectionBox) {
+      const x1 = Math.min(selectionBox.startX, selectionBox.currentX);
+      const x2 = Math.max(selectionBox.startX, selectionBox.currentX);
+      const y1 = Math.min(selectionBox.startY, selectionBox.currentY);
+      const y2 = Math.max(selectionBox.startY, selectionBox.currentY);
+
+      const enclosed = doc.nodes
+        .filter(n => n.x >= x1 && n.x + n.width <= x2 && n.y >= y1 && n.y + n.height <= y2)
+        .map(n => n.id);
+
+      setSelectedNodeIds(enclosed);
+      setSelectionBox(null);
+    }
+
+    if (isConnecting) {
+      setIsConnecting(false);
+      connectingSource.current = null;
+      setConnectionPointer(null);
+    }
+  };
+
+  // Node Pointer Down (start drag or select)
+  const handleNodePointerDown = (e: React.PointerEvent, nodeId: string) => {
+    e.stopPropagation();
+    if (isConnecting) return;
+
+    if (e.shiftKey) {
+      setSelectedNodeIds(prev => prev.includes(nodeId) ? prev.filter(id => id !== nodeId) : [...prev, nodeId]);
+    } else {
+      if (!selectedNodeIds.includes(nodeId)) {
+        setSelectedNodeIds([nodeId]);
+      }
+    }
+    setSelectedEdgeId(null);
+
+    // Initialize dragging
+    setIsDraggingNode(true);
+    dragPointerStart.current = { x: e.clientX, y: e.clientY };
+    const map = new Map<string, { x: number; y: number }>();
+    doc.nodes.forEach(n => {
+      if (selectedNodeIds.includes(n.id) || n.id === nodeId) {
+        map.set(n.id, { x: n.x, y: n.y });
+      }
+    });
+    dragStartPositions.current = map;
+  };
+
+  // Start connector drag from node handle
+  const handleStartConnect = (e: React.PointerEvent, nodeId: string, anchor: AnchorPosition) => {
+    e.stopPropagation();
+    setIsConnecting(true);
+    connectingSource.current = { nodeId, anchor };
+    const wPoint = screenToWorld(e.clientX, e.clientY);
+    setConnectionPointer(wPoint);
+  };
+
+  // Drop connector on target node
+  const handleDropConnect = (e: React.PointerEvent, targetNodeId: string, targetAnchor: AnchorPosition) => {
+    e.stopPropagation();
+    if (!isConnecting || !connectingSource.current) return;
+    const source = connectingSource.current;
+    if (source.nodeId === targetNodeId) {
+      setIsConnecting(false);
+      return;
+    }
+
     const newEdge: DiagramEdge = {
-      id,
-      from: selectedNodeId,
-      to: targetId,
-      label: 'relates to',
+      id: `edge-${Date.now().toString().slice(-4)}`,
+      from: source.nodeId,
+      to: targetNodeId,
+      fromAnchor: source.anchor,
+      toAnchor: targetAnchor,
       style: 'solid',
+      routing: 'orthogonal',
       strokeColor: '#4f46e5',
       strokeWidth: 2,
-      arrowEnd: 'arrow'
+      arrowEnd: 'arrow',
+      label: 'relates to',
     };
-    setEdges(prev => [...prev, newEdge]);
-    setSelectedEdgeId(id);
+
+    updateDoc(prev => ({
+      ...prev,
+      edges: [...prev.edges, newEdge],
+    }));
+
+    setIsConnecting(false);
+    connectingSource.current = null;
+    setConnectionPointer(null);
+    setSelectedEdgeId(newEdge.id);
   };
 
-  // Delete edge
-  const deleteSelectedEdge = () => {
-    if (!selectedEdgeId) return;
-    setEdges(prev => prev.filter(e => e.id !== selectedEdgeId));
+  // Start resize from handle
+  const handleStartResize = (e: React.PointerEvent, nodeId: string, handle: string) => {
+    e.stopPropagation();
+    const node = doc.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    setIsResizing(true);
+    resizeNodeId.current = nodeId;
+    resizeHandle.current = handle;
+    resizeInitial.current = { x: node.x, y: node.y, width: node.width, height: node.height };
+  };
+
+  // Load a template
+  const handleApplyTemplate = (tmpl: TemplateDefinition) => {
+    const newDoc = tmpl.createDocument();
+    setDoc(newDoc);
+    commitToHistory(newDoc);
+    setSelectedNodeIds([]);
     setSelectedEdgeId(null);
+    setIsTemplateModalOpen(false);
   };
 
-  // Update selected node props
-  const updateSelectedNode = (props: Partial<DiagramNode>) => {
-    if (!selectedNodeId) return;
-    setNodes(prev => prev.map(n => (n.id === selectedNodeId ? { ...n, ...props } : n)));
-  };
-
-  // Update selected edge props
-  const updateSelectedEdge = (props: Partial<DiagramEdge>) => {
-    if (!selectedEdgeId) return;
-    setEdges(prev => prev.map(e => (e.id === selectedEdgeId ? { ...e, ...props } : e)));
-  };
-
-  // ER Table columns manipulation
-  const addTableField = (nodeId: string) => {
-    setNodes(prev =>
-      prev.map(n => {
-        if (n.id !== nodeId || !n.fields) return n;
-        return {
-          ...n,
-          height: n.height + 28,
-          fields: [...n.fields, { name: 'new_col', type: 'varchar' }]
-        };
-      })
-    );
-  };
-
-  const removeTableField = (nodeId: string, index: number) => {
-    setNodes(prev =>
-      prev.map(n => {
-        if (n.id !== nodeId || !n.fields) return n;
-        return {
-          ...n,
-          height: Math.max(120, n.height - 28),
-          fields: n.fields.filter((_, idx) => idx !== index)
-        };
-      })
-    );
-  };
-
-  // Export options (Draw.io style)
-  const generateSvgContent = (): string => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    nodes.forEach(n => {
-      minX = Math.min(minX, n.x);
-      minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + n.width);
-      maxY = Math.max(maxY, n.y + n.height);
-    });
-
-    if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 600; maxY = 400; }
-    const padding = 60;
-    const totalW = maxX - minX + padding * 2;
-    const totalH = maxY - minY + padding * 2;
-    const offsetX = minX - padding;
-    const offsetY = minY - padding;
-
-    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">
-      <defs>
-        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569" />
-        </marker>
-        <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-          <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" stroke-width="1.5" fill="none" />
-        </marker>
-        <filter id="shadow" x="-8%" y="-8%" width="116%" height="116%">
-          <feDropShadow dx="0" dy="4" stdDeviation="5" flood-opacity="0.12" />
-        </filter>
-      </defs>
-      <rect width="100%" height="100%" fill="#ffffff" />
-    `;
-
-    // Edges
-    edges.forEach(e => {
-      const fromNode = nodes.find(n => n.id === e.from);
-      const toNode = nodes.find(n => n.id === e.to);
-      if (!fromNode || !toNode) return;
-
-      const sx = fromNode.x + fromNode.width / 2 - offsetX;
-      const sy = fromNode.y + fromNode.height / 2 - offsetY;
-      const tx = toNode.x + toNode.width / 2 - offsetX;
-      const ty = toNode.y + toNode.height / 2 - offsetY;
-
-      const dx = tx - sx;
-      const dy = ty - sy;
-      const cx1 = sx + dx * 0.5;
-      const cy1 = sy;
-      const cx2 = sx + dx * 0.5;
-      const cy2 = ty;
-
-      const dashAttr = e.style === 'dashed' ? 'stroke-dasharray="6,4"' : e.style === 'dotted' ? 'stroke-dasharray="2,4"' : '';
-      const markerAttr = e.arrowEnd === 'crowfoot' ? 'marker-end="url(#crowfoot)"' : 'marker-end="url(#arrow)"';
-
-      svg += `
-        <path d="M ${sx} ${sy} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tx} ${ty}"
-          fill="none" stroke="${e.strokeColor}" stroke-width="${e.strokeWidth}" ${dashAttr} ${markerAttr} />
-      `;
-      if (e.label) {
-        const mx = (sx + tx) / 2;
-        const my = (sy + ty) / 2;
-        svg += `
-          <rect x="${mx - 40}" y="${my - 12}" width="80" height="22" rx="4" fill="#ffffff" stroke="#cbd5e1" stroke-width="1" />
-          <text x="${mx}" y="${my + 3}" font-family="Inter, sans-serif" font-size="10" font-weight="bold" fill="#334155" text-anchor="middle">${e.label}</text>
-        `;
+  // Open Native JSON file
+  const handleOpenFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        if (parsed.nodes && parsed.edges) {
+          setDoc(parsed);
+          commitToHistory(parsed);
+          setSelectedNodeIds([]);
+          setSelectedEdgeId(null);
+        } else {
+          alert('Invalid diagram file format.');
+        }
+      } catch (err) {
+        alert('Failed to read file: invalid JSON.');
       }
-    });
-
-    // Nodes
-    nodes.forEach(n => {
-      const x = n.x - offsetX;
-      const y = n.y - offsetY;
-
-      svg += `<g filter="url(#shadow)">`;
-
-      if (n.type === 'er-table') {
-        const headerH = 38;
-        svg += `
-          <rect x="${x}" y="${y}" width="${n.width}" height="${n.height}" rx="${n.cornerRadius}" fill="#ffffff" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-          <rect x="${x}" y="${y}" width="${n.width}" height="${headerH}" rx="${n.cornerRadius}" fill="${n.fillColor}" />
-          <rect x="${x}" y="${y + headerH - 8}" width="${n.width}" height="8" fill="${n.fillColor}" />
-          <text x="${x + 14}" y="${y + 24}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="900" fill="${n.textColor}" letter-spacing="0.5">${n.text}</text>
-        `;
-        n.fields?.forEach((f, idx) => {
-          const rowY = y + headerH + idx * 26 + 18;
-          svg += `
-            <text x="${x + 14}" y="${rowY}" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#1e293b">${f.name}</text>
-            <text x="${x + n.width - 14}" y="${rowY}" font-family="Inter, sans-serif" font-size="10" font-weight="bold" fill="${f.isPk ? '#ef4444' : f.isFk ? '#6366f1' : '#94a3b8'}" text-anchor="end">${f.isPk ? 'PK ' : f.isFk ? 'FK ' : ''}${f.type}</text>
-          `;
-        });
-      } else if (n.type === 'circle') {
-        const r = n.width / 2;
-        svg += `
-          <circle cx="${x + r}" cy="${y + r}" r="${r}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-          <text x="${x + r}" y="${y + r + 5}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
-        `;
-      } else if (n.type === 'diamond') {
-        const mx = x + n.width / 2;
-        const my = y + n.height / 2;
-        svg += `
-          <polygon points="${mx},${y} ${x + n.width},${my} ${mx},${y + n.height} ${x},${my}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-          <text x="${mx}" y="${my + 4}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
-        `;
-      } else if (n.type === 'cylinder') {
-        svg += `
-          <rect x="${x}" y="${y}" width="${n.width}" height="${n.height}" rx="16" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-          <text x="${x + n.width / 2}" y="${y + n.height / 2 + 5}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
-        `;
-      } else {
-        svg += `
-          <rect x="${x}" y="${y}" width="${n.width}" height="${n.height}" rx="${n.cornerRadius}" fill="${n.fillColor}" stroke="${n.strokeColor}" stroke-width="${n.strokeWidth}" />
-          <text x="${x + n.width / 2}" y="${y + n.height / 2 + 5}" font-family="Inter, sans-serif" font-size="${n.fontSize}" font-weight="bold" fill="${n.textColor}" text-anchor="middle">${n.text}</text>
-        `;
-      }
-
-      svg += `</g>`;
-    });
-
-    svg += `</svg>`;
-    return svg;
-  };
-
-  const handleDownloadSvg = () => {
-    const svgStr = generateSvgContent();
-    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'diagram.svg';
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadPng = () => {
-    const svgStr = generateSvgContent();
-    const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth * 2;
-      canvas.height = img.naturalHeight * 2;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.scale(2, 2);
-        ctx.drawImage(img, 0, 0);
-        const a = document.createElement('a');
-        a.href = canvas.toDataURL('image/png');
-        a.download = 'diagram.png';
-        a.click();
-      }
-      URL.revokeObjectURL(url);
     };
-    img.src = url;
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
-  const handleExportJson = () => {
-    const data = JSON.stringify({ nodes, edges }, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'diagram.drawio.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  // Selected elements for inspector
+  const activeNode = selectedNodeIds.length === 1 ? doc.nodes.find(n => n.id === selectedNodeIds[0]) : null;
+  const activeEdge = selectedEdgeId ? doc.edges.find(e => e.id === selectedEdgeId) : null;
+
+  // Filter templates in modal
+  const filteredTemplates = DIAGRAM_TEMPLATES.filter(t => {
+    const matchesCat = templateCategory === 'All' || t.category === templateCategory;
+    const matchesSearch = t.title.toLowerCase().includes(templateSearch.toLowerCase()) ||
+      t.description.toLowerCase().includes(templateSearch.toLowerCase());
+    return matchesCat && matchesSearch;
+  });
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden font-sans">
-      {/* Top Studio Toolbar */}
-      <div className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-sm z-20">
+    <div className="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden font-sans select-none">
+      {/* Top Main Toolbar */}
+      <div className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-sm z-30">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center text-white shadow-md shadow-cyan-600/30">
             <Workflow size={18} />
           </div>
           <div>
-            <h1 className="text-xs font-black uppercase tracking-widest text-slate-800">Diagram Studio</h1>
-            <p className="text-[10px] text-slate-400 font-semibold">Draw.io Architecture & ER Model Workbench</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-black uppercase tracking-widest text-slate-800">{doc.title}</span>
+              <span className="px-2 py-0.5 text-[9px] font-bold rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 uppercase">Draw.io Platform</span>
+            </div>
+            <p className="text-[10px] text-slate-400 font-semibold">Architecture, ERD, and Mermaid Diagram Studio</p>
           </div>
         </div>
 
-        {/* Tab Selector */}
+        {/* View Switcher: Visual Canvas vs Mermaid Code */}
         <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveTab('visual')}
@@ -573,10 +640,10 @@ export const DiagramStudio: React.FC = () => {
             }`}
           >
             <Layout size={14} />
-            Visual Canvas (Draw.io)
+            Visual Canvas
           </button>
           <button
-            onClick={() => setActiveTab('mermaid')}
+            onClick={handleSwitchToMermaid}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
               activeTab === 'mermaid' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
             }`}
@@ -586,180 +653,305 @@ export const DiagramStudio: React.FC = () => {
           </button>
         </div>
 
-        {/* Export Dropdown / Save Buttons */}
+        {/* Top Action Toolbar (Templates, Undo, Redo, Save, Export) */}
         <div className="flex items-center gap-2">
           <button
-            onClick={handleDownloadPng}
+            onClick={() => setIsTemplateModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-bold transition-all border border-indigo-200"
+            title="Browse pre-built diagram templates"
+          >
+            <Sparkles size={14} />
+            Templates
+          </button>
+
+          <div className="h-6 w-px bg-slate-200 mx-1" />
+
+          <button
+            onClick={handleUndo}
+            disabled={historyStack.current.length <= 1}
+            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg disabled:opacity-30 transition-all"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 size={16} />
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={redoStack.current.length === 0}
+            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg disabled:opacity-30 transition-all"
+            title="Redo (Ctrl+Y)"
+          >
+            <Redo2 size={16} />
+          </button>
+
+          <div className="h-6 w-px bg-slate-200 mx-1" />
+
+          {/* Open / Save / Export */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleOpenFile}
+            accept=".json"
+            className="hidden"
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all"
+            title="Open Native Diagram JSON"
+          >
+            <FolderOpen size={16} />
+          </button>
+          <button
+            onClick={() => downloadNativeJson(doc)}
+            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all"
+            title="Save .diagram.json Project"
+          >
+            <Save size={16} />
+          </button>
+
+          <div className="h-6 w-px bg-slate-200 mx-1" />
+
+          <button
+            onClick={() => downloadPng(doc, 2)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 text-white rounded-xl text-xs font-black shadow-md shadow-cyan-600/20 hover:bg-cyan-700 transition-all"
-            title="Download PNG Image"
+            title="Export full resolution PNG"
           >
             <Download size={14} />
-            Save PNG
+            Export PNG
           </button>
           <button
-            onClick={handleDownloadSvg}
+            onClick={() => downloadSvg(doc)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition-all border border-slate-200"
-            title="Export as Vector SVG"
+            title="Export editable Vector SVG"
           >
             SVG
-          </button>
-          <button
-            onClick={handleExportJson}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold transition-all border border-slate-200"
-            title="Save JSON Model"
-          >
-            JSON
           </button>
         </div>
       </div>
 
-      {/* Main Studio Body */}
+      {/* Import Notification Banner */}
+      {importNotification && (
+        <div className="bg-emerald-600 text-white text-xs font-bold px-6 py-2.5 flex items-center justify-between animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={16} />
+            <span>{importNotification}</span>
+          </div>
+          <button onClick={() => setImportNotification(null)} className="text-white/80 hover:text-white">✕</button>
+        </div>
+      )}
+
+      {/* Main Studio Viewport */}
       {activeTab === 'visual' ? (
         <div className="flex-1 flex overflow-hidden relative">
-          {/* Left Tool Palette (Shapes & Components) */}
-          <div className="w-60 bg-white border-r border-slate-200 p-4 flex flex-col justify-between shrink-0 overflow-y-auto custom-scrollbar">
+          {/* Left Shape Palette (Categorized Library) */}
+          <div className="w-64 bg-white border-r border-slate-200 p-4 flex flex-col justify-between shrink-0 overflow-y-auto custom-scrollbar z-10">
             <div className="space-y-6">
               <div>
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-3">Add Shapes & Nodes</span>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-3">Core Flow & Shapes</span>
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => addShape('rectangle')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-slate-100 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-600 transition-all group"
+                    onClick={() => handleAddShape('rectangle')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <Square size={20} className="text-slate-400 group-hover:text-cyan-600" />
-                    <span className="text-[10px] font-bold">Rectangle</span>
+                    <Square size={18} className="text-slate-500" />
+                    <span className="text-[10px] font-bold">Process</span>
                   </button>
                   <button
-                    onClick={() => addShape('rounded')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-slate-100 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-600 transition-all group"
+                    onClick={() => handleAddShape('rounded')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <div className="w-5 h-5 rounded-lg border-2 border-slate-400 group-hover:border-cyan-600" />
+                    <div className="w-5 h-5 rounded-lg border-2 border-slate-500" />
                     <span className="text-[10px] font-bold">Rounded</span>
                   </button>
                   <button
-                    onClick={() => addShape('circle')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-slate-100 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-600 transition-all group"
+                    onClick={() => handleAddShape('circle')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <Circle size={20} className="text-slate-400 group-hover:text-cyan-600" />
-                    <span className="text-[10px] font-bold">Circle</span>
+                    <Circle size={18} className="text-slate-500" />
+                    <span className="text-[10px] font-bold">Terminal / State</span>
                   </button>
                   <button
-                    onClick={() => addShape('diamond')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-slate-100 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-600 transition-all group"
+                    onClick={() => handleAddShape('diamond')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <Diamond size={20} className="text-slate-400 group-hover:text-cyan-600" />
+                    <Diamond size={18} className="text-slate-500" />
                     <span className="text-[10px] font-bold">Decision</span>
                   </button>
                   <button
-                    onClick={() => addShape('cylinder')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-slate-100 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-600 transition-all group col-span-2"
+                    onClick={() => handleAddShape('cylinder')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-cyan-500 hover:bg-cyan-50/50 text-slate-700 transition-all"
                   >
-                    <Database size={20} className="text-slate-400 group-hover:text-cyan-600" />
-                    <span className="text-[10px] font-bold">Database Storage</span>
+                    <Database size={18} className="text-slate-500" />
+                    <span className="text-[10px] font-bold">Database</span>
                   </button>
                   <button
-                    onClick={() => addShape('er-table')}
-                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border-2 border-cyan-200 bg-cyan-50/50 hover:bg-cyan-100/50 text-cyan-900 transition-all col-span-2 shadow-sm"
+                    onClick={() => handleAddShape('sticky')}
+                    className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl border border-slate-200 hover:border-amber-400 hover:bg-amber-50/50 text-slate-700 transition-all"
                   >
-                    <Layers size={20} className="text-cyan-600" />
-                    <span className="text-[11px] font-black uppercase">ER Database Table</span>
+                    <FileText size={18} className="text-amber-500" />
+                    <span className="text-[10px] font-bold">Sticky Note</span>
                   </button>
                 </div>
               </div>
 
-              {/* Viewport Zoom */}
+              <div>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-3">Structured Entities</span>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => handleAddShape('er-table')}
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100 text-indigo-950 font-bold text-xs transition-all shadow-sm"
+                  >
+                    <Layers size={18} className="text-indigo-600 shrink-0" />
+                    <div className="text-left">
+                      <div className="font-black">ER Database Table</div>
+                      <div className="text-[10px] text-indigo-600 font-medium">Columns, PK/FK tags & relations</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleAddShape('uml-class')}
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-slate-400 text-slate-800 font-bold text-xs transition-all"
+                  >
+                    <Layout size={18} className="text-slate-600 shrink-0" />
+                    <div className="text-left">
+                      <div className="font-black">UML Class Box</div>
+                      <div className="text-[10px] text-slate-500 font-medium">Fields, methods & visibility</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleAddShape('swimlane')}
+                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-slate-400 text-slate-800 font-bold text-xs transition-all"
+                  >
+                    <Square size={18} className="text-slate-600 shrink-0" />
+                    <div className="text-left">
+                      <div className="font-black">Swimlane Container</div>
+                      <div className="text-[10px] text-slate-500 font-medium">Group stages & Kanban lanes</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Viewport Scale & Canvas Settings */}
               <div>
                 <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-2">Canvas Zoom</span>
                 <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                  <button onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} className="p-1 hover:bg-white rounded text-slate-500">
+                  <button
+                    onClick={() => setViewport(v => ({ ...v, zoom: Math.max(0.3, v.zoom - 0.1) }))}
+                    className="p-1 hover:bg-white rounded text-slate-500"
+                  >
                     <ZoomOut size={16} />
                   </button>
-                  <span className="flex-1 text-center font-bold text-xs text-slate-600">{Math.round(zoom * 100)}%</span>
-                  <button onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="p-1 hover:bg-white rounded text-slate-500">
+                  <span className="flex-1 text-center font-bold text-xs text-slate-600">{Math.round(viewport.zoom * 100)}%</span>
+                  <button
+                    onClick={() => setViewport(v => ({ ...v, zoom: Math.min(2.5, v.zoom + 0.1) }))}
+                    className="p-1 hover:bg-white rounded text-slate-500"
+                  >
                     <ZoomIn size={16} />
+                  </button>
+                  <button
+                    onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}
+                    className="p-1 hover:bg-white rounded text-slate-500 text-[10px] font-bold"
+                    title="Reset Zoom"
+                  >
+                    100%
                   </button>
                 </div>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100">
-              <span className="text-[10px] text-slate-400 font-semibold block text-center">Interactive Graph Layer v1.0</span>
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-semibold">
+              <span>{doc.nodes.length} Elements</span>
+              <span>{doc.edges.length} Connectors</span>
             </div>
           </div>
 
-          {/* Central Interactive Infinite Grid Canvas */}
+          {/* Central Pannable / Interactive World Canvas */}
           <div
-            ref={boardRef}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onClick={() => { setSelectedNodeId(null); setSelectedEdgeId(null); }}
-            className="flex-1 relative overflow-auto custom-scrollbar select-none bg-slate-100"
+            ref={canvasRef}
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={handleCanvasPointerUp}
+            className="flex-1 relative overflow-hidden bg-slate-100 cursor-default"
             style={{
               backgroundImage: 'radial-gradient(#cbd5e1 1.2px, transparent 1.2px)',
-              backgroundSize: '24px 24px'
+              backgroundSize: `${24 * viewport.zoom}px ${24 * viewport.zoom}px`,
+              backgroundPosition: `${viewport.x}px ${viewport.y}px`
             }}
           >
+            {/* World Container transformed by pan and zoom */}
             <div
-              className="w-[2400px] h-[1800px] relative origin-top-left"
-              style={{ transform: `scale(${zoom})` }}
+              className="absolute inset-0 origin-top-left pointer-events-none"
+              style={{
+                transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+              }}
             >
               {/* SVG Edges Layer */}
-              <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+              <svg className="absolute inset-0 w-[5000px] h-[5000px] pointer-events-none overflow-visible z-0">
                 <defs>
-                  <marker id="studio-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                    <path d="M 0 1 L 9 5 L 0 9 z" fill="#4f46e5" />
+                  <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 0 1 L 9 5 L 0 9 z" fill="#475569" />
                   </marker>
-                  <marker id="studio-crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
-                    <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#4f46e5" strokeWidth="1.5" fill="none" />
+                  <marker id="crowfoot" viewBox="0 0 12 12" refX="6" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+                    <path d="M 1 2 L 10 6 L 1 10 M 10 2 L 10 10" stroke="#475569" strokeWidth="1.5" fill="none" />
                   </marker>
                 </defs>
-                {edges.map(e => {
-                  const fromNode = nodes.find(n => n.id === e.from);
-                  const toNode = nodes.find(n => n.id === e.to);
+
+                {doc.edges.map(e => {
+                  const fromNode = doc.nodes.find(n => n.id === e.from);
+                  const toNode = doc.nodes.find(n => n.id === e.to);
                   if (!fromNode || !toNode) return null;
 
-                  const sx = fromNode.x + fromNode.width / 2;
-                  const sy = fromNode.y + fromNode.height / 2;
-                  const tx = toNode.x + toNode.width / 2;
-                  const ty = toNode.y + toNode.height / 2;
+                  const fromCenter = { x: fromNode.x + fromNode.width / 2, y: fromNode.y + fromNode.height / 2 };
+                  const toCenter = { x: toNode.x + toNode.width / 2, y: toNode.y + toNode.height / 2 };
 
-                  const dx = tx - sx;
-                  const dy = ty - sy;
-                  const cx1 = sx + dx * 0.5;
-                  const cy1 = sy;
-                  const cx2 = sx + dx * 0.5;
-                  const cy2 = ty;
+                  const start = getNodeAnchorPoint(fromNode, e.fromAnchor || 'auto', toCenter);
+                  const end = getNodeAnchorPoint(toNode, e.toAnchor || 'auto', fromCenter);
 
+                  const { pathData, labelPoint } = computeEdgePath(start, end, e.routing || 'orthogonal', e.waypoints);
                   const isSelected = selectedEdgeId === e.id;
-                  const strokeDash = e.style === 'dashed' ? '6,4' : e.style === 'dotted' ? '2,4' : undefined;
-                  const marker = e.arrowEnd === 'crowfoot' ? 'url(#studio-crowfoot)' : 'url(#studio-arrow)';
+                  const dash = e.style === 'dashed' ? '6,4' : e.style === 'dotted' ? '2,4' : undefined;
+                  const marker = e.arrowEnd === 'crowfoot' ? 'url(#crowfoot)' : 'url(#arrow)';
 
                   return (
-                    <g key={e.id} className="pointer-events-auto cursor-pointer" onClick={(ev) => { ev.stopPropagation(); setSelectedEdgeId(e.id); setSelectedNodeId(null); }}>
+                    <g
+                      key={e.id}
+                      className="pointer-events-auto cursor-pointer"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setSelectedEdgeId(e.id);
+                        setSelectedNodeIds([]);
+                      }}
+                    >
+                      {/* Thick transparent hit-area */}
                       <path
-                        d={`M ${sx} ${sy} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tx} ${ty}`}
+                        d={pathData}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth={14}
+                      />
+                      {/* Visible Edge */}
+                      <path
+                        d={pathData}
                         fill="none"
                         stroke={isSelected ? '#06b6d4' : e.strokeColor}
                         strokeWidth={isSelected ? e.strokeWidth + 2 : e.strokeWidth}
-                        strokeDasharray={strokeDash}
+                        strokeDasharray={dash}
                         markerEnd={marker}
                       />
                       {e.label && (
-                        <g>
+                        <g transform={`translate(${labelPoint.x}, ${labelPoint.y})`}>
                           <rect
-                            x={(sx + tx) / 2 - 40}
-                            y={(sy + ty) / 2 - 12}
-                            width="80"
-                            height="24"
-                            rx="6"
+                            x={-35}
+                            y={-12}
+                            width={70}
+                            height={24}
+                            rx={4}
                             fill="#ffffff"
                             stroke={isSelected ? '#06b6d4' : '#cbd5e1'}
-                            strokeWidth="1.5"
+                            strokeWidth={1}
                           />
                           <text
-                            x={(sx + tx) / 2}
-                            y={(sy + ty) / 2 + 4}
-                            fontSize="10"
+                            x={0}
+                            y={4}
+                            fontSize={10}
                             fontWeight="bold"
                             fontFamily="Inter, sans-serif"
                             fill="#334155"
@@ -772,61 +964,120 @@ export const DiagramStudio: React.FC = () => {
                     </g>
                   );
                 })}
+
+                {/* Connecting Line Preview while dragging from anchor */}
+                {isConnecting && connectingSource.current && connectionPointer && (() => {
+                  const srcNode = doc.nodes.find(n => n.id === connectingSource.current?.nodeId);
+                  if (!srcNode) return null;
+                  const start = getNodeAnchorPoint(srcNode, connectingSource.current.anchor, connectionPointer);
+                  const { pathData } = computeEdgePath(start, connectionPointer, 'orthogonal');
+                  return (
+                    <path
+                      d={pathData}
+                      fill="none"
+                      stroke="#06b6d4"
+                      strokeWidth={2.5}
+                      strokeDasharray="4,4"
+                      markerEnd="url(#arrow)"
+                    />
+                  );
+                })()}
               </svg>
 
-              {/* Node Components */}
-              {nodes.map(n => {
-                const isSelected = selectedNodeId === n.id;
+              {/* Nodes Layer */}
+              {doc.nodes.map(n => {
+                const isSelected = selectedNodeIds.includes(n.id);
                 return (
                   <div
                     key={n.id}
-                    onMouseDown={(e) => handleNodeMouseDown(e, n.id)}
+                    onPointerDown={(e) => handleNodePointerDown(e, n.id)}
                     style={{
                       transform: `translate3d(${n.x}px, ${n.y}px, 0)`,
                       width: n.width,
                       minHeight: n.height,
                     }}
-                    className={`absolute rounded-xl transition-shadow cursor-grab active:cursor-grabbing ${
-                      isSelected ? 'ring-4 ring-cyan-500 shadow-2xl' : 'shadow-lg hover:shadow-xl'
+                    className={`absolute pointer-events-auto rounded-xl transition-shadow cursor-move group select-none ${
+                      isSelected ? 'ring-2 ring-cyan-500 shadow-2xl z-20' : 'shadow-md hover:shadow-lg z-10'
                     }`}
                   >
-                    {/* ER Table Card */}
+                    {/* Connection Anchor Handles (Top, Bottom, Left, Right) */}
+                    {(['top', 'bottom', 'left', 'right'] as AnchorPosition[]).map(anchor => {
+                      const posClass =
+                        anchor === 'top' ? '-top-2 left-1/2 -translate-x-1/2' :
+                        anchor === 'bottom' ? '-bottom-2 left-1/2 -translate-x-1/2' :
+                        anchor === 'left' ? 'top-1/2 -left-2 -translate-y-1/2' :
+                        'top-1/2 -right-2 -translate-y-1/2';
+                      return (
+                        <div
+                          key={anchor}
+                          onPointerDown={(e) => handleStartConnect(e, n.id, anchor)}
+                          onPointerUp={(e) => handleDropConnect(e, n.id, anchor)}
+                          className={`absolute ${posClass} w-3.5 h-3.5 bg-white border-2 border-cyan-500 rounded-full cursor-crosshair opacity-0 group-hover:opacity-100 transition-opacity z-30 hover:scale-125 hover:bg-cyan-500`}
+                          title={`Connect from ${anchor}`}
+                        />
+                      );
+                    })}
+
+                    {/* ER Table Shape */}
                     {n.type === 'er-table' ? (
                       <div
                         style={{
                           borderRadius: `${n.cornerRadius}px`,
                           borderColor: n.strokeColor,
-                          borderWidth: `${n.strokeWidth}px`
+                          borderWidth: `${n.strokeWidth}px`,
                         }}
                         className="bg-white border flex flex-col overflow-hidden"
                       >
-                        {/* Table Header */}
                         <div
                           style={{ backgroundColor: n.fillColor, color: n.textColor }}
                           className="px-3 py-2 flex items-center justify-between"
                         >
                           <span className="font-black text-xs uppercase tracking-wider truncate">{n.text}</span>
                           <button
-                            onClick={(e) => { e.stopPropagation(); addTableField(n.id); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateDoc(prev => ({
+                                ...prev,
+                                nodes: prev.nodes.map(node => {
+                                  if (node.id !== n.id) return node;
+                                  return {
+                                    ...node,
+                                    height: node.height + 26,
+                                    fields: [...(node.fields || []), { id: `f-${Date.now()}`, name: 'new_col', type: 'varchar(100)' }]
+                                  };
+                                })
+                              }));
+                            }}
                             className="p-1 hover:bg-black/20 rounded text-white"
                             title="Add column"
                           >
                             <Plus size={12} />
                           </button>
                         </div>
-
-                        {/* Fields List */}
                         <div className="divide-y divide-slate-100 bg-white">
                           {n.fields?.map((f, fIdx) => (
-                            <div key={fIdx} className="px-3 py-1.5 flex items-center justify-between text-[11px] group hover:bg-slate-50">
+                            <div key={f.id} className="px-3 py-1.5 flex items-center justify-between text-[11px] group/col hover:bg-slate-50">
                               <span className="font-semibold text-slate-700 truncate">{f.name}</span>
                               <div className="flex items-center gap-1.5">
                                 <span className="font-mono text-[10px] text-slate-400">{f.type}</span>
                                 {f.isPk && <span className="px-1 py-0.2 bg-red-100 text-red-600 font-black text-[9px] rounded">PK</span>}
                                 {f.isFk && <span className="px-1 py-0.2 bg-indigo-100 text-indigo-600 font-black text-[9px] rounded">FK</span>}
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); removeTableField(n.id, fIdx); }}
-                                  className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    updateDoc(prev => ({
+                                      ...prev,
+                                      nodes: prev.nodes.map(node => {
+                                        if (node.id !== n.id || !node.fields) return node;
+                                        return {
+                                          ...node,
+                                          height: Math.max(90, node.height - 26),
+                                          fields: node.fields.filter((_, idx) => idx !== fIdx)
+                                        };
+                                      })
+                                    }));
+                                  }}
+                                  className="opacity-0 group-col-hover:opacity-100 text-slate-300 hover:text-red-500"
                                 >
                                   <Trash2 size={11} />
                                 </button>
@@ -835,45 +1086,124 @@ export const DiagramStudio: React.FC = () => {
                           ))}
                         </div>
                       </div>
-                    ) : (
-                      /* Standard Shapes (Rectangle, Circle, Diamond, Cylinder) */
+                    ) : n.type === 'uml-class' ? (
+                      /* UML Class Box */
                       <div
+                        style={{
+                          borderRadius: `${n.cornerRadius}px`,
+                          borderColor: n.strokeColor,
+                          borderWidth: `${n.strokeWidth}px`,
+                        }}
+                        className="bg-white border flex flex-col overflow-hidden"
+                      >
+                        <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 text-center font-black text-xs text-slate-800">
+                          {n.text}
+                        </div>
+                        <div className="p-2 space-y-1 text-[11px] font-mono">
+                          {n.umlMembers?.map(m => (
+                            <div key={m.id} className="text-slate-600">
+                              <span className="font-bold text-slate-400 mr-1">{m.visibility}</span>
+                              <span>{m.name}</span>
+                              {m.type && <span className="text-slate-400">: {m.type}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      /* Standard Shapes (Rectangle, Rounded, Circle, Diamond, Cylinder, Sticky) */
+                      <div
+                        onDoubleClick={() => setEditingNodeId(n.id)}
                         style={{
                           backgroundColor: n.fillColor,
                           borderColor: n.strokeColor,
                           borderWidth: `${n.strokeWidth}px`,
                           borderRadius: n.type === 'circle' ? '9999px' : `${n.cornerRadius}px`,
                           color: n.textColor,
-                          height: n.height
+                          height: n.height,
                         }}
-                        className="flex items-center justify-center p-4 border text-center font-bold text-xs shadow-inner"
+                        className={`flex items-center justify-center p-3 border text-center font-bold text-xs ${
+                          n.textAlign === 'left' ? 'text-left justify-start' : n.textAlign === 'right' ? 'text-right justify-end' : 'text-center justify-center'
+                        }`}
                       >
-                        <span className="select-none leading-tight">{n.text}</span>
+                        {editingNodeId === n.id ? (
+                          <textarea
+                            autoFocus
+                            value={n.text}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              updateDoc(prev => ({
+                                ...prev,
+                                nodes: prev.nodes.map(node => node.id === n.id ? { ...node, text: val } : node)
+                              }), false);
+                            }}
+                            onBlur={() => {
+                              setEditingNodeId(null);
+                              commitToHistory(doc);
+                            }}
+                            className="w-full h-full bg-white/80 p-1 rounded font-bold text-xs text-slate-800 outline-none resize-none"
+                          />
+                        ) : (
+                          <span className="whitespace-pre-line leading-relaxed">{n.text}</span>
+                        )}
                       </div>
+                    )}
+
+                    {/* Resize Handles (Corner handles when selected) */}
+                    {isSelected && (
+                      <>
+                        <div
+                          onPointerDown={(e) => handleStartResize(e, n.id, 'se')}
+                          className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-cyan-600 rounded-sm cursor-se-resize z-40"
+                        />
+                        <div
+                          onPointerDown={(e) => handleStartResize(e, n.id, 'sw')}
+                          className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-cyan-600 rounded-sm cursor-sw-resize z-40"
+                        />
+                      </>
                     )}
                   </div>
                 );
               })}
+
+              {/* Rubber Band Selection Rectangle */}
+              {selectionBox && (
+                <div
+                  className="absolute border border-cyan-500 bg-cyan-500/10 pointer-events-none z-50"
+                  style={{
+                    left: Math.min(selectionBox.startX, selectionBox.currentX),
+                    top: Math.min(selectionBox.startY, selectionBox.currentY),
+                    width: Math.abs(selectionBox.currentX - selectionBox.startX),
+                    height: Math.abs(selectionBox.currentY - selectionBox.startY),
+                  }}
+                />
+              )}
             </div>
           </div>
 
           {/* Right Inspector / Styling Config Pane */}
-          <div className="w-80 bg-white border-l border-slate-200 p-6 flex flex-col justify-between shrink-0 overflow-y-auto custom-scrollbar">
+          <div className="w-80 bg-white border-l border-slate-200 p-6 flex flex-col justify-between shrink-0 overflow-y-auto custom-scrollbar z-10">
             <div className="space-y-6">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Object Inspector</span>
                 <Sliders size={14} className="text-slate-400" />
               </div>
 
-              {/* Node Inspector */}
-              {selectedNode ? (
+              {/* Active Node Inspector */}
+              {activeNode ? (
                 <div className="space-y-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Entity Label</label>
-                    <input
-                      value={selectedNode.text}
-                      onChange={(e) => updateSelectedNode({ text: e.target.value })}
-                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none"
+                    <textarea
+                      value={activeNode.text}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        updateDoc(prev => ({
+                          ...prev,
+                          nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, text: val } : n)
+                        }));
+                      }}
+                      rows={2}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none resize-none"
                     />
                   </div>
 
@@ -881,108 +1211,118 @@ export const DiagramStudio: React.FC = () => {
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1.5 flex items-center gap-1">
                       <Palette size={12} />
-                      Background / Header Color
+                      Background / Header Theme
                     </label>
                     <div className="grid grid-cols-6 gap-2">
-                      {PRESET_COLORS.map(c => (
+                      {COLOR_PRESETS.map(c => (
                         <button
                           key={c}
-                          onClick={() => updateSelectedNode({ fillColor: c })}
+                          onClick={() => {
+                            updateDoc(prev => ({
+                              ...prev,
+                              nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, fillColor: c } : n)
+                            }));
+                          }}
                           style={{ backgroundColor: c }}
-                          className="h-7 rounded-lg border-2 border-white shadow-sm flex items-center justify-center transition-transform hover:scale-110"
+                          className="h-7 rounded-lg border-2 border-slate-200 shadow-sm flex items-center justify-center transition-transform hover:scale-110"
                         >
-                          {selectedNode.fillColor === c && <Check size={12} className="text-white" />}
+                          {activeNode.fillColor === c && <Check size={12} className={c === '#ffffff' || c === '#f8fafc' ? 'text-slate-800' : 'text-white'} />}
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  {/* Corner Radius & Line Thickness */}
+                  {/* Corner Radius & Border Weight */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Corner Radius</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Corners</label>
                       <input
                         type="range"
                         min="0"
                         max="30"
-                        value={selectedNode.cornerRadius}
-                        onChange={(e) => updateSelectedNode({ cornerRadius: parseInt(e.target.value) })}
+                        value={activeNode.cornerRadius}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, cornerRadius: val } : n)
+                          }));
+                        }}
                         className="w-full accent-cyan-600"
                       />
-                      <span className="text-[10px] font-bold text-slate-500">{selectedNode.cornerRadius}px</span>
+                      <span className="text-[10px] font-bold text-slate-500">{activeNode.cornerRadius}px</span>
                     </div>
                     <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Border Thickness</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Thickness</label>
                       <input
                         type="range"
                         min="1"
                         max="8"
-                        value={selectedNode.strokeWidth}
-                        onChange={(e) => updateSelectedNode({ strokeWidth: parseInt(e.target.value) })}
+                        value={activeNode.strokeWidth}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          updateDoc(prev => ({
+                            ...prev,
+                            nodes: prev.nodes.map(n => n.id === activeNode.id ? { ...n, strokeWidth: val } : n)
+                          }));
+                        }}
                         className="w-full accent-cyan-600"
                       />
-                      <span className="text-[10px] font-bold text-slate-500">{selectedNode.strokeWidth}px</span>
+                      <span className="text-[10px] font-bold text-slate-500">{activeNode.strokeWidth}px</span>
                     </div>
                   </div>
 
-                  {/* Connector: Link to another table/node */}
-                  <div className="pt-3 border-t border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-2 flex items-center gap-1.5">
-                      <CornerDownRight size={12} />
-                      Connect to Node
-                    </label>
-                    <select
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          addEdge(e.target.value);
-                          e.target.value = '';
-                        }
-                      }}
-                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-700 outline-none"
-                    >
-                      <option value="">+ Connect relation line...</option>
-                      {nodes
-                        .filter(n => n.id !== selectedNode.id)
-                        .map(n => (
-                          <option key={n.id} value={n.id}>
-                            {n.text}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-
+                  {/* Delete Element Button */}
                   <button
-                    onClick={deleteSelectedNode}
+                    onClick={() => {
+                      updateDoc(prev => ({
+                        ...prev,
+                        nodes: prev.nodes.filter(n => n.id !== activeNode.id),
+                        edges: prev.edges.filter(e => e.from !== activeNode.id && e.to !== activeNode.id)
+                      }));
+                      setSelectedNodeIds([]);
+                    }}
                     className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5"
                   >
                     <Trash2 size={14} />
                     Delete Element
                   </button>
                 </div>
-              ) : selectedEdge ? (
-                /* Edge Inspector */
+              ) : activeEdge ? (
+                /* Active Edge Inspector */
                 <div className="space-y-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Relationship Label</label>
                     <input
-                      value={selectedEdge.label || ''}
-                      onChange={(e) => updateSelectedEdge({ label: e.target.value })}
+                      value={activeEdge.label || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        updateDoc(prev => ({
+                          ...prev,
+                          edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, label: val } : ed)
+                        }));
+                      }}
                       className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Line Style</label>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Line Pattern</label>
                     <div className="grid grid-cols-3 gap-2">
-                      {(['solid', 'dashed', 'dotted'] as ArrowStyle[]).map(style => (
+                      {(['solid', 'dashed', 'dotted'] as ArrowStyle[]).map(st => (
                         <button
-                          key={style}
-                          onClick={() => updateSelectedEdge({ style })}
+                          key={st}
+                          onClick={() => {
+                            updateDoc(prev => ({
+                              ...prev,
+                              edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, style: st } : ed)
+                            }));
+                          }}
                           className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                            selectedEdge.style === style ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                            activeEdge.style === st ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
                           }`}
                         >
-                          {style}
+                          {st}
                         </button>
                       ))}
                     </div>
@@ -992,17 +1332,27 @@ export const DiagramStudio: React.FC = () => {
                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Arrow Head Type</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
-                        onClick={() => updateSelectedEdge({ arrowEnd: 'arrow' })}
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, arrowEnd: 'arrow' } : ed)
+                          }));
+                        }}
                         className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                          selectedEdge.arrowEnd === 'arrow' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                          activeEdge.arrowEnd === 'arrow' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
                         }`}
                       >
-                        Arrow
+                        Arrow (→)
                       </button>
                       <button
-                        onClick={() => updateSelectedEdge({ arrowEnd: 'crowfoot' })}
+                        onClick={() => {
+                          updateDoc(prev => ({
+                            ...prev,
+                            edges: prev.edges.map(ed => ed.id === activeEdge.id ? { ...ed, arrowEnd: 'crowfoot' } : ed)
+                          }));
+                        }}
                         className={`py-2 text-[10px] font-bold uppercase rounded-lg border transition-all ${
-                          selectedEdge.arrowEnd === 'crowfoot' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+                          activeEdge.arrowEnd === 'crowfoot' ? 'bg-cyan-600 text-white border-cyan-600' : 'bg-slate-50 text-slate-600 border-slate-200'
                         }`}
                       >
                         Crow's Foot (ER)
@@ -1011,7 +1361,13 @@ export const DiagramStudio: React.FC = () => {
                   </div>
 
                   <button
-                    onClick={deleteSelectedEdge}
+                    onClick={() => {
+                      updateDoc(prev => ({
+                        ...prev,
+                        edges: prev.edges.filter(ed => ed.id !== activeEdge.id)
+                      }));
+                      setSelectedEdgeId(null);
+                    }}
                     className="w-full py-2.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5"
                   >
                     <Trash2 size={14} />
@@ -1020,42 +1376,44 @@ export const DiagramStudio: React.FC = () => {
                 </div>
               ) : (
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
-                  <p className="text-xs text-slate-400 font-medium">Click on any shape or connector line to customize properties.</p>
+                  <p className="text-xs text-slate-400 font-medium">Select any shape node or relationship line on the canvas to customize properties.</p>
                 </div>
               )}
             </div>
 
             <div className="p-4 bg-cyan-50/70 rounded-2xl border border-cyan-100">
-              <span className="text-[10px] font-black text-cyan-800 uppercase tracking-wider block mb-1">Draw.io Tip</span>
+              <span className="text-[10px] font-black text-cyan-800 uppercase tracking-wider block mb-1">Canvas Shortcuts</span>
               <p className="text-[10px] text-cyan-700 leading-relaxed">
-                Drag any card to arrange your schema layout. Adjust thickness and corners on the right.
+                Hover over any node to see connection anchors. Drag an anchor to another node to connect. Double-click to edit text.
               </p>
             </div>
           </div>
         </div>
       ) : (
-        /* Mermaid Code Tab */
+        /* Mermaid.js Code Tab (Fully Synchronized Import / Export) */
         <div className="flex-1 flex overflow-hidden">
           <div className="w-1/2 p-6 flex flex-col border-r border-slate-200 bg-slate-900 text-slate-100">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-mono text-cyan-400 font-bold uppercase tracking-wider">Mermaid.js Definition</span>
+              <span className="text-xs font-mono text-cyan-400 font-bold uppercase tracking-wider">Mermaid.js Code Editor</span>
               <button
-                onClick={() => setMermaidText(SAMPLE_MERMAID_CODE)}
+                onClick={() => setMermaidText(exportDocumentToMermaid(doc))}
                 className="text-xs text-slate-400 hover:text-white flex items-center gap-1 font-semibold"
+                title="Regenerate code from the visual canvas"
               >
                 <RotateCcw size={12} />
-                Reset Sample
+                Sync From Canvas
               </button>
             </div>
             <textarea
               value={mermaidText}
               onChange={(e) => setMermaidText(e.target.value)}
               className="flex-1 w-full bg-slate-950 font-mono text-xs p-4 rounded-2xl border border-slate-800 text-cyan-300 focus:outline-none focus:border-cyan-500 custom-scrollbar resize-none leading-relaxed"
-              placeholder="Write Mermaid ER syntax..."
+              placeholder="Write flowchart, erDiagram, or classDiagram syntax..."
             />
             {mermaidError && (
-              <div className="mt-3 p-3 bg-red-950/60 border border-red-800 rounded-xl text-red-300 text-xs font-mono">
-                {mermaidError}
+              <div className="mt-3 p-3 bg-red-950/60 border border-red-800 rounded-xl text-red-300 text-xs font-mono flex items-center gap-2">
+                <AlertCircle size={16} className="shrink-0 text-red-400" />
+                <span>{mermaidError}</span>
               </div>
             )}
           </div>
@@ -1072,23 +1430,87 @@ export const DiagramStudio: React.FC = () => {
               </div>
             </div>
 
+            {/* Import into Canvas Button */}
             <div className="flex items-center gap-3 mt-4">
               <button
-                onClick={() => {
-                  const blob = new Blob([mermaidSvg], { type: 'image/svg+xml;charset=utf-8' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'mermaid-diagram.svg';
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
-                disabled={Boolean(mermaidError) || !mermaidSvg}
-                className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs uppercase tracking-wider shadow-md transition-all flex items-center justify-center gap-2"
+                onClick={handleImportMermaidToCanvas}
+                disabled={Boolean(mermaidError) || !mermaidText.trim()}
+                className="flex-1 py-3.5 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-cyan-600/30 transition-all flex items-center justify-center gap-2"
               >
-                <Download size={14} />
-                Download Mermaid SVG
+                <Sparkles size={16} />
+                Import & Edit on Visual Canvas
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template Gallery Modal */}
+      {isTemplateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-6 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl h-[80vh] flex flex-col overflow-hidden">
+            <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-black text-slate-800">Diagram Template Gallery</h3>
+                <p className="text-xs text-slate-400 font-medium">Select a battle-tested template to instantly launch an editable diagram.</p>
+              </div>
+              <button
+                onClick={() => setIsTemplateModalOpen(false)}
+                className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Filter Tabs & Search */}
+            <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-1">
+                {['All', 'Business & Strategy', 'Engineering & Database', 'Flowchart & Process', 'Project & Planning'].map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setTemplateCategory(cat)}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      templateCategory === cat ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+              <div className="relative w-64">
+                <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  value={templateSearch}
+                  onChange={(e) => setTemplateSearch(e.target.value)}
+                  placeholder="Search templates..."
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Grid of Templates */}
+            <div className="flex-1 p-6 overflow-y-auto custom-scrollbar grid grid-cols-2 gap-4">
+              {filteredTemplates.map(tmpl => (
+                <div
+                  key={tmpl.id}
+                  onClick={() => handleApplyTemplate(tmpl)}
+                  className="p-5 rounded-2xl border border-slate-200 hover:border-cyan-500 hover:shadow-xl bg-white cursor-pointer transition-all flex flex-col justify-between group"
+                >
+                  <div>
+                    <span className="text-[10px] font-black uppercase text-cyan-600 tracking-wider block mb-1">{tmpl.category}</span>
+                    <h4 className="text-sm font-black text-slate-800 group-hover:text-cyan-600 transition-colors mb-2">{tmpl.title}</h4>
+                    <p className="text-xs text-slate-500 leading-relaxed mb-4">{tmpl.description}</p>
+                  </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                    <div className="flex gap-1.5">
+                      {tmpl.tags.map(tag => (
+                        <span key={tag} className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] font-bold">#{tag}</span>
+                      ))}
+                    </div>
+                    <span className="text-xs font-bold text-cyan-600 group-hover:translate-x-1 transition-transform">Use Template →</span>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
