@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build-win/
+*.blob
+*.tar.gz
+*.tgz
+.env.local

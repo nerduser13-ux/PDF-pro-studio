@@ -4,9 +4,8 @@ import App from './App';
 import './index.css';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Use an absolute CDN URL for the worker to avoid resolution issues.
-// Note: PDF.js 5.x uses .mjs for the worker bundle.
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.4.530/build/pdf.worker.min.mjs';
+// Use local worker bundle for offline desktop performance
+pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
