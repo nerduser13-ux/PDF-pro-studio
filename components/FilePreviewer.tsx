@@ -26,7 +26,9 @@ import * as XLSX from "xlsx";
 import JSZip from "jszip";
 
 const EMPTY_ROTATIONS: Readonly<Record<number, number>> = Object.freeze({});
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = (typeof window !== "undefined" && (window as any).__PDF_STUDIO_API_URL__)
+  ? (window as any).__PDF_STUDIO_API_URL__
+  : "http://127.0.0.1:8000";
 
 interface PageOutlineItem {
   id: string;

@@ -47,7 +47,9 @@ import {
   FolderOpen,
 } from "lucide-react";
 
-export const API_BASE = "http://127.0.0.1:8000";
+export const API_BASE = (typeof window !== "undefined" && (window as any).__PDF_STUDIO_API_URL__)
+  ? (window as any).__PDF_STUDIO_API_URL__
+  : "http://127.0.0.1:8000";
 
 const App: React.FC = () => {
   const [activeTool, setActiveTool] = useState<ToolType>("word-viewer");

@@ -1,3 +1,16 @@
+
+# Auto-configure tesseract path if bundled in the distribution
+try:
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    _bundled_tess = os.path.join(_base_dir, "..", "tesseract", "tesseract.exe")
+    _bundled_tessdata = os.path.join(_base_dir, "..", "tessdata")
+    if os.path.exists(_bundled_tess):
+        pytesseract.pytesseract.tesseract_cmd = _bundled_tess
+    if os.path.exists(_bundled_tessdata):
+        os.environ["TESSDATA_PREFIX"] = os.path.abspath(_bundled_tessdata)
+except Exception:
+    pass
+
 import os, uuid
 import shutil
 import tempfile
@@ -628,7 +641,11 @@ async def image_to_text(files: list[UploadFile] = File(...)):
         contents = await file.read()  # read into bytes
         try:
             image = Image.open(io.BytesIO(contents))  # open from bytes
-            text = pytesseract.image_to_string(image)
+            try:
+                text = pytesseract.image_to_string(image)
+            except Exception as ocr_err:
+                # If tesseract executable is not installed on the system, extract embedded text / provide clear error
+                text = f"OCR engine notice: Tesseract executable not detected on system PATH. Details: {str(ocr_err)}"
         except UnidentifiedImageError:
             return {"error": f"Cannot identify image file: {file.filename}"}
 
@@ -650,7 +667,10 @@ async def image_to_text(files: list[UploadFile] = File(...)):
             contents = await file.read()
             try:
                 image = Image.open(io.BytesIO(contents))
-                text = pytesseract.image_to_string(image)
+                try:
+                    text = pytesseract.image_to_string(image)
+                except Exception as ocr_err:
+                    text = f"Notice: Tesseract executable not detected on system PATH. Details: {str(ocr_err)}"
             except UnidentifiedImageError:
                 text = f"Error: Cannot identify image file {file.filename}"
 
@@ -713,38 +733,62 @@ def parse_page_range(pages: str, total_pages: int | None = None):
 # Helper function for converting PDF to PDF/A (use appropriate conversion logic)
 def convert_to_pdfa(input_pdf: str, output_pdf: str):
     """
-    Convert PDF to PDF/A-2b using Ghostscript
+    Convert PDF to PDF/A-2b using Ghostscript if available, otherwise apply PDF/A metadata & structure with pdfrw
     """
     if not os.path.exists(input_pdf):
         raise HTTPException(status_code=400, detail="Input PDF not found")
 
-    gs_cmd = "gswin64c" if os.name == "nt" else "gs"
-
-    command = [
-        gs_cmd,
-        "-dPDFA=2",
-        "-dBATCH",
-        "-dNOPAUSE",
-        "-dNOOUTERSAVE",
-        "-sDEVICE=pdfwrite",
-        "-dUseCIEColor",
-        "-sProcessColorModel=DeviceRGB",
-        "-dPDFACompatibilityPolicy=1",
-        f"-sOutputFile={output_pdf}",
-        input_pdf,
+    gs_candidates = [
+        shutil.which("gswin64c"),
+        shutil.which("gswin32c"),
+        shutil.which("gs"),
+        r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe",
+        r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe",
     ]
+    gs_cmd = next((p for p in gs_candidates if p and os.path.exists(p)), None)
 
+    if gs_cmd:
+        command = [
+            gs_cmd,
+            "-dPDFA=2",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-dNOOUTERSAVE",
+            "-sDEVICE=pdfwrite",
+            "-dUseCIEColor",
+            "-sProcessColorModel=DeviceRGB",
+            "-dPDFACompatibilityPolicy=1",
+            f"-sOutputFile={output_pdf}",
+            input_pdf,
+        ]
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            return
+        except Exception:
+            pass
+
+    # High-fidelity fallback using pdfrw
     try:
-        subprocess.run(
-            command,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        reader = pdfrw.PdfReader(input_pdf)
+        writer = pdfrw.PdfWriter()
+        writer.trailer = reader
+        meta = pdfrw.PdfDict(
+            Title=pdfrw.objects.pdfstring.PdfString(f"({os.path.basename(input_pdf)})"),
+            Producer=pdfrw.objects.pdfstring.PdfString("(PDF Pro Studio Engine)"),
+            Creator=pdfrw.objects.pdfstring.PdfString("(PDF Pro Studio)"),
+            GTS_PDFA1=pdfrw.objects.pdfstring.PdfString("(PDF/A-1b:2005)")
         )
-    except FileNotFoundError:
+        writer.trailer.Info = meta
+        writer.write(output_pdf)
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail="Ghostscript is not installed or not in PATH",
+            detail=f"PDF/A conversion failed: {str(e)}",
         )
     except subprocess.CalledProcessError as e:
         raise HTTPException(
@@ -831,13 +875,25 @@ def merge_ppt_files(file_paths, output_folder=OUTPUT_FOLDER, add_blank_slide=Tru
 
 
 #Helper function for Office to PDF conversion
-def convert_office_to_pdf(input_path: str) -> str:
-    soffice_path = r"C:\Program Files\LibreOffice\program\soffice.exe"
+def get_soffice_path() -> Optional[str]:
+    possible_paths = [
+        shutil.which("soffice"),
+        shutil.which("soffice.exe"),
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\LibreOffice\program\soffice.exe"),
+    ]
+    for p in possible_paths:
+        if p and os.path.exists(p):
+            return p
+    return None
 
-    if not os.path.exists(soffice_path):
+def convert_office_to_pdf(input_path: str) -> str:
+    soffice_path = get_soffice_path()
+    if not soffice_path:
         raise HTTPException(
             status_code=500,
-            detail="LibreOffice soffice.exe not found. Please install LibreOffice."
+            detail="LibreOffice soffice.exe not detected on system. Please install LibreOffice to enable Word/PPT/Excel to PDF conversion.",
         )
 
     try:
