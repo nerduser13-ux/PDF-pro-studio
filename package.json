@@ -13,6 +13,7 @@
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",
     "@xyflow/react": "^12.12.0",
+    "docx": "^9.13.0",
     "fabric": "^6.6.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.562.0",
@@ -20,6 +21,7 @@
     "mermaid": "^12.2.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.530",
+    "pptxgenjs": "^3.12.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "vitest": "^5.0.5",
